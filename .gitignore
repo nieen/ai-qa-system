@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+*.egg
+tmp/
+
+# Go
+vendor/
+
+# Node
+node_modules/
+.next/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# Git
+.git/
+
+# Frontend specific
+frontend/ai-qa-app/.next/
+frontend/ai-qa-app/out/

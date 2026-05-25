@@ -1,0 +1,191 @@
+# 企业级 AI 智能问答系统 - 基础设施 Docker Compose
+# 版本: v1.0.0
+
+networks:
+  ai-qa-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  milvus-data:
+  milvus-etcd-data:
+  milvus-minio-data:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+services:
+  # ============================================================
+  # 1. 向量数据库 - Milvus (企业级，支持百亿级向量检索)
+  # ============================================================
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: aiqa-etcd
+    restart: always
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus-etcd-data:/etcd
+    networks:
+      - ai-qa-net
+    command: etcd -advertise-client-urls=http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: aiqa-milvus-minio
+    restart: always
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - milvus-minio-data:/minio_data
+    networks:
+      - ai-qa-net
+    command: minio server /minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.5.4
+    container_name: aiqa-milvus
+    restart: always
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      # 性能优化参数
+      KNOWHERE_GPU_RESOURCE_ENABLE: "true"
+      QUERY_NODE_ENABLE_DISK_INDEX: "true"
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # HTTP
+    volumes:
+      - milvus-data:/var/lib/milvus
+    networks:
+      - ai-qa-net
+    depends_on:
+      milvus-etcd:
+        condition: service_healthy
+      milvus-minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ============================================================
+  # 2. 元数据数据库 - PostgreSQL
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiqa-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: aiqa
+      POSTGRES_PASSWORD: aiqa_secure_pass_2026
+      POSTGRES_DB: aiqa
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - ai-qa-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiqa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # 3. 缓存 - Redis
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: aiqa-redis
+    restart: always
+    command: redis-server --requirepass aiqa_redis_pass_2026 --maxmemory 4gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ai-qa-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # 4. 对象存储 - MinIO (原始文档存储)
+  # ============================================================
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: aiqa-minio
+    restart: always
+    environment:
+      MINIO_ROOT_USER: aiqa_admin
+      MINIO_ROOT_PASSWORD: aiqa_minio_pass_2026
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    volumes:
+      - minio-data:/data
+    networks:
+      - ai-qa-net
+    command: minio server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================
+  # 5. AI 推理服务部署脚本 (可选，需 GPU)
+  # 实际部署时取消注释并配置路径
+  # ============================================================
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: aiqa-vllm
+  #   restart: always
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - /path/to/models:/models
+  #   networks:
+  #     - ai-qa-net
+  #   command: >
+  #     --model /models/DeepSeek-R1-Distill-Qwen-32B
+  #     --port 8000
+  #     --max-model-len 32768
+  #     --gpu-memory-utilization 0.9
+  #     --tensor-parallel-size 2
+  #     --dtype bfloat16
+  #     --served-model-name deepseek-r1
+  #     --enable-auto-tool-choice
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
