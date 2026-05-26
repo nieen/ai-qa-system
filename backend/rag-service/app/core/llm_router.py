@@ -3,7 +3,7 @@ LLM 路由器
 管理多个 LLM 供应商，支持主备切换、自动降级、健康检查
 """
 import logging
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import Any, AsyncGenerator, List, Dict, Optional
 
 from app.core.protocols import LLMProvider, LLMResponse
 
@@ -76,7 +76,10 @@ class LLMRouter:
                 yield token
 
     async def _fallback_stream(
-        self, messages, temperature, max_tokens
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
     ) -> AsyncGenerator[str, None]:
         """流式切换到备用模型，逐 token 产出"""
         if not self._fallback or not self._fallback_on_error:
@@ -110,7 +113,12 @@ class LLMRouter:
             logger.warning("主模型 [%s] 失败: %s", self._current.model_name, e)
             return await self._fallback_chat(messages, temperature, max_tokens)
 
-    async def _fallback_chat(self, messages, temperature, max_tokens) -> LLMResponse:
+    async def _fallback_chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMResponse:
         """备模型非流式调用"""
         if not self._fallback or not self._fallback_on_error:
             return LLMResponse(content="所有 AI 模型不可用，请稍后重试。")
@@ -128,10 +136,10 @@ class LLMRouter:
             logger.error("备用模型也失败: %s", e)
             return LLMResponse(content="所有 AI 模型不可用，请稍后重试。")
 
-    async def check_health(self) -> dict:
+    async def check_health(self) -> Dict[str, Any]:
         """检查所有模型健康状态"""
         primary_ok = await self._primary.check_health()
-        fallback_ok = True
+        fallback_ok: bool = True
         if self._fallback:
             fallback_ok = await self._fallback.check_health()
 
@@ -143,13 +151,13 @@ class LLMRouter:
             "total_fallbacks": self._total_fallbacks,
         }
 
-    async def reset(self):
+    async def reset(self) -> None:
         """重置回主模型"""
         self._current = self._primary
         self._is_fallback_mode = False
         logger.info("LLM 路由器重置回主模型")
 
-    async def close(self):
+    async def close(self) -> None:
         """清理资源"""
         if hasattr(self._primary, "close"):
             await self._primary.close()

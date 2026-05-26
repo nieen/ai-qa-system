@@ -3,7 +3,7 @@
 对检索结果进行精排，提升最终答案质量
 """
 import logging
-from typing import List, Dict, Any
+from typing import List
 
 from config.settings import settings
 from app.core.protocols import Reranker, RetrievedChunk
@@ -18,7 +18,7 @@ class RerankerService(Reranker):
     _model = None
     _is_initialized = False
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         if self._is_initialized:
             return
 

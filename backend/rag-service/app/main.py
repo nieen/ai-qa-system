@@ -2,11 +2,13 @@
 企业级 AI 智能问答系统 - RAG 服务入口
 提供文档索引、向量检索、问答生成等核心能力
 """
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import logging
 
 from config.settings import settings
 from app.api.routes import router as api_router
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期管理"""
     logger.info(f"启动 {settings.APP_NAME}...")
     logger.info(f"  Pipeline: {settings.PIPELINE_TYPE}")

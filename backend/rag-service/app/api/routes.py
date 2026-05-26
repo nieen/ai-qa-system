@@ -6,15 +6,11 @@ import json
 import logging
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.container import (
-    container, get_vector_store, get_embedding_model,
-    get_reranker, get_pipeline, get_llm_router,
-)
-from app.core.protocols import (VectorStore, EmbeddingModel, QueryPipeline, PipelineEvent)
+from app.core.container import get_vector_store, get_embedding_model, get_pipeline, get_llm_router
 from app.ingestion.document_processor import document_processor
 from config.settings import settings
 

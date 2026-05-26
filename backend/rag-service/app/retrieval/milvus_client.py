@@ -178,7 +178,7 @@ class MilvusClient(VectorStore):
         if not self._is_initialized:
             return []
 
-        from pymilvus import Collection, AnnSearchRequest, RRFRanker
+        from pymilvus import Collection
 
         full_name = f"{settings.MILVUS_COLLECTION_PREFIX}{collection_name}"
         collection = Collection(name=full_name)
@@ -249,9 +249,8 @@ class MilvusClient(VectorStore):
             logger.debug(f"Milvus 关闭 (可忽略): {e}")
 
 
-def _parse_metadata(raw) -> Dict[str, Any]:
+def _parse_metadata(raw: Any) -> Dict[str, Any]:
     """解析 metadata 字段为 dict"""
-    import json
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):

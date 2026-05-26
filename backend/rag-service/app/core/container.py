@@ -7,7 +7,7 @@ from typing import Optional
 
 from config.settings import settings
 from app.core.protocols import (
-    VectorStore, KeywordStore, EmbeddingModel, Reranker, QueryPipeline,
+    VectorStore, KeywordStore, EmbeddingModel, Reranker, QueryPipeline, LLMProvider,
 )
 from app.core.llm_router import LLMRouter
 from app.core.cache import conversation_cache
@@ -25,12 +25,12 @@ class Container:
 
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls) -> "Container":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if hasattr(self, "_initialized") and self._initialized:
             return
         self._initialized = True
@@ -172,7 +172,7 @@ class Container:
             max_total_tokens=settings.LLM_MAX_TOTAL_TOKENS,
         )
 
-    def _create_provider(self, provider_type: str, is_primary: bool) -> object:
+    def _create_provider(self, provider_type: str, is_primary: bool) -> LLMProvider:
         """创建 LLM 供应商实例"""
         if provider_type == "vllm":
             return VLLMProvider(

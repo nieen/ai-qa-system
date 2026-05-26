@@ -6,8 +6,7 @@ import asyncio
 import enum
 import logging
 import time
-from functools import wraps
-from typing import Optional, Callable, Awaitable
+from typing import Any, Optional, Callable, Awaitable, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 30.0,
         half_open_max_requests: int = 1,
-    ):
+    ) -> None:
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
@@ -100,7 +99,7 @@ class CircuitBreaker:
         self._half_open_requests = 0
         logger.info(f"[熔断器] {self.name}: 手动重置")
 
-    def stats(self) -> dict:
+    def stats(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "state": self._state.value,
@@ -117,15 +116,15 @@ class CircuitBreakerOpenError(Exception):
 
 
 async def with_retry(
-    fn: Callable,
+    fn: Callable[..., Awaitable],
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 10.0,
     circuit_breaker: Optional[CircuitBreaker] = None,
     timeout: Optional[float] = None,
-    *args,
-    **kwargs,
-):
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     """
     带重试 + 熔断 + 超时的调用包装
 
@@ -172,7 +171,7 @@ async def with_retry(
     raise last_exception or RuntimeError("重试耗尽但无异常信息")
 
 
-async def _call_with_timeout(fn, timeout, *args, **kwargs):
+async def _call_with_timeout(fn: Callable[..., Awaitable], timeout: Optional[float], *args: Any, **kwargs: Any) -> Any:
     """带超时的调用包装"""
     if timeout:
         return await asyncio.wait_for(fn(*args, **kwargs), timeout=timeout)

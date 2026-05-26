@@ -5,8 +5,7 @@
 """
 import json
 import logging
-import time
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 
 from config.settings import settings
 
@@ -24,12 +23,12 @@ class ConversationCache:
     _instance = None
     _redis = None
 
-    def __new__(cls):
+    def __new__(cls) -> "ConversationCache":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """初始化 Redis 连接"""
         if self._redis is not None:
             return
@@ -69,8 +68,8 @@ class ConversationCache:
         self,
         conversation_id: str,
         messages: List[Dict[str, str]],
-        ttl: int = 3600,  # 默认 1 小时
-    ):
+        ttl: int = 3600,
+    ) -> None:
         """缓存对话历史"""
         if self._redis:
             try:
@@ -87,7 +86,7 @@ class ConversationCache:
         conversation_id: str,
         message: Dict[str, str],
         ttl: int = 3600,
-    ):
+    ) -> None:
         """追加一条消息到对话历史"""
         if self._redis:
             try:
@@ -104,7 +103,7 @@ class ConversationCache:
             except Exception as e:
                 logger.warning(f"Redis 追加失败: {e}")
 
-    async def delete_conversation(self, conversation_id: str):
+    async def delete_conversation(self, conversation_id: str) -> None:
         """删除缓存的对话"""
         if self._redis:
             try:
@@ -112,7 +111,7 @@ class ConversationCache:
             except Exception as e:
                 logger.warning(f"Redis 删除失败: {e}")
 
-    async def close(self):
+    async def close(self) -> None:
         if self._redis:
             await self._redis.close()
 

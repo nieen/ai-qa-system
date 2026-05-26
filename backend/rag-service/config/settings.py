@@ -3,7 +3,6 @@ RAG 服务配置
 支持通过环境变量覆盖，优先级: 环境变量 > .env 文件 > 默认值
 """
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):

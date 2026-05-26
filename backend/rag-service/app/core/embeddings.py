@@ -3,7 +3,7 @@
 提供文本向量化服务，支持稠密检索和稀疏检索双通道
 """
 import logging
-from typing import List, Optional
+from typing import List
 import numpy as np
 
 from config.settings import settings
@@ -18,12 +18,12 @@ class EmbeddingManager:
     _model = None
     _is_initialized = False
 
-    def __new__(cls):
+    def __new__(cls) -> "EmbeddingManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """初始化嵌入模型"""
         if self._is_initialized:
             return

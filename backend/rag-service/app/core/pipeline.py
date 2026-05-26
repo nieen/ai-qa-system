@@ -2,10 +2,9 @@
 查询 Pipeline 编排器
 抽象所有查询流程，Phase 1 = NaiveRAG, Phase 2 = AgenticRAG
 """
-import json
 import logging
 import uuid
-from typing import AsyncGenerator, List, Dict, Optional, Callable
+from typing import Any, AsyncGenerator, List, Dict, Optional, Callable
 
 from app.core.protocols import (
     QueryPipeline, PipelineEvent, LLMProvider,
@@ -234,7 +233,7 @@ class NaiveRAGPipeline(QueryPipeline):
             parts.append(f"{role}: {msg.get('content', '')}")
         return "\n".join(parts)
 
-    def _extract_sources(self, retrieved: List[RetrievedChunk]) -> List[dict]:
+    def _extract_sources(self, retrieved: List[RetrievedChunk]) -> List[Dict[str, Any]]:
         """提取引用来源 (含完整元数据，供前端渲染)"""
         seen = set()
         sources = []

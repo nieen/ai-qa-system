@@ -5,7 +5,7 @@ LLM 供应商实现
 import json
 import logging
 import time
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import Any, AsyncGenerator, List, Dict
 
 import httpx
 
@@ -32,7 +32,7 @@ class OpenAICompatibleProvider(LLMProvider):
         top_p: float = 0.9,
         timeout: float = 60.0,
         max_retries: int = 2,
-    ):
+    ) -> None:
         self._model_name = model_name
         self._api_base = api_base.rstrip("/")
         self._api_key = api_key
@@ -154,16 +154,17 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             resp = await self._client.get(f"{self._api_base}/models")
             return resp.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.debug(f"健康检查失败 [{self._name}]: {e}")
             return False
 
-    def _headers(self) -> dict:
+    def _headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()
 
 
@@ -177,14 +178,14 @@ class DeepSeekAPIProvider(OpenAICompatibleProvider):
         self,
         api_key: str,
         model_name: str = "deepseek-chat",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name="deepseek-api",
             api_base="https://api.deepseek.com",
             api_key=api_key,
             model_name=model_name,
-            timeout=120.0,  # DeepSeek API 处理时间长
+            timeout=120.0,
             **kwargs,
         )
 
@@ -198,8 +199,8 @@ class VLLMProvider(OpenAICompatibleProvider):
         self,
         api_base: str = "http://localhost:8000",
         model_name: str = "deepseek-r1",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name="vllm-local",
             api_base=api_base,

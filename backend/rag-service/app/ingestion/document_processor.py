@@ -5,8 +5,7 @@
 import logging
 import hashlib
 import os
-from typing import List, Optional, Dict, Any
-from pathlib import Path
+from typing import List, Dict, Any
 
 from config.settings import settings
 
@@ -277,7 +276,8 @@ class DocumentProcessor:
             else:
                 try:
                     chunk_text = enc.decode(chunk_tokens)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Token decode 失败，回退到字符截断: {e}")
                     chunk_text = text[start:end]
 
             chunks.append(chunk_text)

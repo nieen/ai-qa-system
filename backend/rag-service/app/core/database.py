@@ -2,6 +2,7 @@
 数据库连接管理 (PostgreSQL)
 """
 import logging
+from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -28,7 +29,7 @@ class Base(DeclarativeBase):
     pass
 
 
-async def init_db():
+async def init_db() -> None:
     """初始化数据库连接"""
     try:
         # 测试连接
@@ -40,13 +41,13 @@ async def init_db():
         logger.warning("服务将继续运行，但数据库相关功能将不可用")
 
 
-async def close_db():
+async def close_db() -> None:
     """关闭数据库连接"""
     await engine.dispose()
     logger.info("数据库连接已关闭")
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """获取数据库会话 (依赖注入用)"""
     async with async_session_factory() as session:
         try:
