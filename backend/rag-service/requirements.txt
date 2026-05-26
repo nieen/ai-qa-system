@@ -8,12 +8,6 @@ uvicorn[standard]==0.27.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
-# RAG 框架
-llama-index==0.10.0
-llama-index-llms-openai==0.1.5
-llama-index-embeddings-huggingface==0.1.4
-llama-index-vector-stores-milvus==0.1.4
-
 # AI 模型
 sentence-transformers==2.3.0
 transformers>=4.37.0
@@ -41,16 +35,7 @@ redis>=5.0.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
-
-# 异步任务
-celery>=5.3.0
-redis>=5.0.0
+tiktoken>=0.6.0
 
 # 监控
 prometheus-client>=0.19.0
-opentelemetry-api>=1.22.0
-opentelemetry-sdk>=1.22.0
-
-# 爬虫
-httpx>=0.26.0
-parsel>=1.9.0

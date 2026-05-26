@@ -1,12 +1,17 @@
 """
 RAG 服务 API 路由 (重构版)
 仅处理 HTTP 请求/响应序列化，业务逻辑委托给 Pipeline + Container
+
+异步任务策略:
+  - 实时问答 → async/await + SSE 流式 (不走 Celery)
+  - 文档索引 → FastAPI BackgroundTasks (轻量, 零额外依赖)
+  - 批量处理 → 由外部编排或独立的 Worker 进程处理
 """
 import json
 import logging
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -96,7 +101,20 @@ async def list_documents(kb_id: str):
 
 
 @router.post("/knowledge-bases/{kb_id}/documents/upload")
-async def upload_document(kb_id: str, file: UploadFile = File(...)):
+async def upload_document(
+    kb_id: str,
+    file: UploadFile = File(...),
+    bg: BackgroundTasks = BackgroundTasks(),
+):
+    """
+    上传文档 (异步索引)
+
+    流程:
+      1. 保存文件到临时目录 → 立即返回 "processing" 状态
+      2. 后台任务: 解析 → 向量化 → 存储到 Milvus
+
+    支持格式: pdf, docx, md, html, txt
+    """
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
 
@@ -112,20 +130,53 @@ async def upload_document(kb_id: str, file: UploadFile = File(...)):
     with open(tmp_path, "wb") as f:
         f.write(content)
 
+    doc_id = str(uuid.uuid4())
+
+    # 后台异步索引 (FastAPI BackgroundTasks, 零额外依赖)
+    bg.add_task(_index_document_background, kb_id, doc_id, tmp_path, file_type, file.filename)
+
+    return {
+        "id": doc_id,
+        "title": file.filename,
+        "file_type": file_type,
+        "status": "processing",
+        "message": "文档已加入索引队列，将在后台处理",
+    }
+
+
+async def _index_document_background(
+    kb_id: str,
+    doc_id: str,
+    file_path: str,
+    file_type: str,
+    filename: str,
+):
+    """
+    后台文档索引任务
+
+    在 FastAPI BackgroundTasks 中运行，不阻塞 API 响应。
+    多副本部署时: 每个副本各自处理自己的后台任务。
+    """
+    import os
+    from app.core.container import get_vector_store, get_embedding_model
+    from app.core.protocols import Document as DocModel
+
+    logger.info(f"开始后台索引文档: {filename}")
+
     try:
-        chunks = await document_processor.process(tmp_path, file_type)
+        chunks = await document_processor.process(file_path, file_type)
         if not chunks:
-            raise HTTPException(400, "文档内容为空或无法解析")
+            logger.warning(f"文档内容为空: {filename}")
+            return
 
         texts = [c["content"] for c in chunks]
         embedding_model = get_embedding_model()
         embeddings = await embedding_model.embed_documents(texts)
 
-        from app.core.protocols import Document as DocModel
         documents = [
             DocModel(
                 chunk_id=str(uuid.uuid4()),
-                document_id=str(uuid.uuid4()),
+                document_id=doc_id,
                 kb_id=kb_id,
                 chunk_index=c["chunk_index"],
                 content=c["content"],
@@ -137,16 +188,12 @@ async def upload_document(kb_id: str, file: UploadFile = File(...)):
         vector_store = get_vector_store()
         await vector_store.insert(kb_id, documents, embeddings)
 
-        return {
-            "id": documents[0].document_id if documents else "",
-            "title": file.filename,
-            "file_type": file_type,
-            "status": "indexed",
-            "chunk_count": len(chunks),
-        }
+        logger.info(f"后台索引完成: {filename} → {len(chunks)} 个块")
+    except Exception as e:
+        logger.error(f"后台索引失败 [{filename}]: {e}")
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 
 @router.delete("/knowledge-bases/{kb_id}/documents/{doc_id}")
@@ -167,7 +214,7 @@ async def get_document_status(kb_id: str, doc_id: str):
 @router.post("/knowledge-bases/{kb_id}/chat")
 async def chat(kb_id: str, req: ChatRequest):
     """
-    知识库问答 (流式)
+    知识库问答 (流式 SSE)
 
     使用 QueryPipeline 执行完整 RAG 流程:
       Phase 1: NaiveRAGPipeline (检索 → 重排序 → 生成)
@@ -188,9 +235,6 @@ async def chat(kb_id: str, req: ChatRequest):
         ):
             if event.type == "llm.token":
                 yield f"data: {json.dumps({'type': 'token', 'content': event.data['content']})}\n\n"
-
-            elif event.type == "retrieval.started":
-                yield f"data: {json.dumps({'type': 'metadata', 'retrieved_count': 0, 'status': 'searching'})}\n\n"
 
             elif event.type == "retrieval.merged":
                 yield f"data: {json.dumps({
