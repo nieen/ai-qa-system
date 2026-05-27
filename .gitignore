@@ -38,3 +38,6 @@ Thumbs.db
 # Frontend specific
 frontend/ai-qa-app/.next/
 frontend/ai-qa-app/out/
+
+# Agent
+.atomcode
