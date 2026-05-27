@@ -39,7 +39,7 @@
 ### 前置条件
 - Docker & Docker Compose
 - NVIDIA GPU + CUDA 12+ (LLM 推理)
-- Python 3.10+, Node 18+, Go 1.22+
+- Python 3.14.5+, Node 18+, Go 1.26.3+
 
 ### 1. 启动基础设施
 ```bash

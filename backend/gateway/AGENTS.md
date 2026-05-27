@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-Go 1.22 + Gin v1.9, 模块路径 `github.com/ai-qa-system/gateway`
+Go 1.26.3 + Gin v1.9, 模块路径 `github.com/ai-qa-system/gateway`
 
 ## 必须知道的命令
 
