@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-Next.js 14.2 (App Router) + React 18 + TypeScript strict + Tailwind CSS 3
+Next.js 16.2 (App Router) + React 19 + TypeScript strict + Tailwind CSS 3
 
 ## 必须知道的命令
 

@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-Python 3.14.5 / FastAPI 0.109 / Milvus 2.5 / BGE-M3 / DeepSeek + vLLM
+Python 3.14.5 / FastAPI 0.136.3 / Milvus 2.5 / BGE-M3 / DeepSeek + vLLM
 
 ## 必须知道的命令
 
