@@ -17,7 +17,7 @@
   - [3.1 向量数据库：Milvus](#31-向量数据库milvus-v254)
   - [3.2 嵌入模型：BGE-M3](#32-嵌入模型bge-m3)
   - [3.3 重排序模型：BGE-Reranker](#33-重排序模型bge-reranker-v2-m3)
-  - [3.4 LLM 推理：DeepSeek + vLLM](#34-llm-推理deepseek--vllm)
+  - [3.4 LLM API 接入](#34-llm-api-接入)
 - [4. 硬件配置建议](#4-硬件配置建议)
 - [5. 知识库数据模型](#5-知识库数据模型)
 - [6. Prompt 模板设计](#6-prompt-模板设计)
@@ -26,7 +26,7 @@
 - [9. 代码架构与扩展性设计](#9-代码架构与扩展性设计)
   - [9.1 接口抽象层](#91-核心抽象接口层-protocols)
   - [9.2 依赖注入容器](#92-依赖注入容器-container)
-  - [9.3 LLM 多供应商路由与降级](#93-llm-多供应商路由与降级)
+  - [9.3 LLM 双协议路由与降级](#93-llm-双协议路由与降级)
   - [9.4 Pipeline 编排器](#94-pipeline-编排器)
   - [9.5 熔断与重试](#95-熔断与重试)
   - [9.6 持久化缓存](#96-持久化缓存)
@@ -42,7 +42,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    用户交互层 (Frontend)                       │
-│         Next.js 14 Web App + 企业微信/飞书 Bot               │
+│         Next.js 16 Web App + 企业微信/飞书 Bot               │
 └──────────────────────┬──────────────────────────────────────┘
                        │ HTTP/WebSocket / SSE
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -57,10 +57,12 @@
        │              │              │
 ┌──────▼──────────────▼──────────────▼────────────────────────┐
 │                     AI 引擎层                                 │
-│  ┌────────────┐ ┌──────────────┐ ┌───────────────────┐      │
-│  │ vLLM       │ │ Embedding    │ │ Reranker          │      │
-│  │ (DeepSeek) │ │ (BGE-M3)     │ │ (BGE-Reranker)    │      │
-│  └────────────┘ └──────────────┘ └───────────────────┘      │
+│  ┌────────────────┐ ┌──────────────┐ ┌───────────────────┐      │
+│  │  LLM API        │ │ Embedding    │ │ Reranker          │      │
+│  │  (DeepSeek/     │ │ (BGE-M3)     │ │ (BGE-Reranker)    │      │
+│  │   Claude/       │ │              │ │                   │      │
+│  │   OpenAI)       │ │              │ │                   │      │
+│  └────────────────┘ └──────────────┘ └───────────────────┘      │
 └──────┬──────────────────────┬───────────────────────────────┘
        │                      │
 ┌──────▼──────────────────────▼───────────────────────────────┐
@@ -76,9 +78,9 @@
 
 | 层 | 组件 | 技术 | 版本/说明 |
 |----|------|------|----------|
-| **LLM** | 推理引擎 | [vLLM](https://github.com/vllm-project/vllm) | PagedAttention, Continuous Batching |
-| | 主模型 | DeepSeek-R1 / Distill 系列 | 中文理解顶尖，本地部署 |
-| | 量化 | AWQ / GPTQ 4-bit | 70B 模型 ~140GB → ~40GB |
+| **LLM** | 供应商 | DeepSeek / Claude / OpenAI (API 接入) | 全部通过 API，不部署本地推理模型 |
+| | 备用模型 | 自动降级 (主模型不可用时切换) | 支持不同供应商交叉备用 |
+| | 双协议 | OpenAI 兼容格式 + Anthropic Messages | 覆盖主流 LLM 供应商 |
 | **嵌入** | Embedding | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | 1024 维，稠密+稀疏+ColBERT 三通道 |
 | | Reranker | [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) | 精排提升 15-25% |
 | **向量库** | 向量数据库 | [Milvus v2.5.4](https://milvus.io/) | 企业级分布式，原生 hybrid_search |
@@ -86,7 +88,7 @@
 | | 分块 | 混合策略 (标题分割 + tiktoken 固定窗口) | CHUNK_SIZE=512, OVERLAP=64 |
 | **后端** | API 网关 | Go + [Gin](https://gin-gonic.com/) | 高并发，低延迟 |
 | | RAG 编排 | Python + [FastAPI](https://fastapi.tiangolo.com/) | Python AI 生态 |
-| **前端** | Web 界面 | [Next.js 14](https://nextjs.org/) | SSR, 流式输出, Tailwind |
+| **前端** | Web 界面 | [Next.js 16](https://nextjs.org/) | SSR, 流式输出, Tailwind, React 19 |
 | **存储** | 元数据 | PostgreSQL 16 | 用户/知识库/对话 |
 | | 缓存 | Redis 7 | 会话/限流 |
 | | 对象存储 | MinIO | 原始文档，S3 兼容 |
@@ -221,7 +223,7 @@ def _fixed_size_chunks(self, text):
 └──────┬───────┘
        ▼
 ┌──────────────┐
-│ LLM 生成回答   │ ← DeepSeek (vLLM) 流式 SSE 输出
+│ LLM 生成回答   │ ← DeepSeek / Claude (API 流式 SSE 输出)
 │  流式输出      │     打字机效果 + 来源标注
 └──────┬───────┘
        ▼
@@ -506,31 +508,35 @@ System Prompt (含历史摘要 + 最近轮次文本)
 - **效果**: top-30 精排到 top-5，准确率提升 15-25%
 - **部署**: transformers，推荐 GPU 推理
 
-### 3.4 LLM 推理：DeepSeek + vLLM
+### 3.4 LLM API 接入
 
-| 维度 | 配置 |
+系统通过标准 API 接入 LLM，**不部署本地推理模型**。支持多供应商、双协议、自动降级。
+
+| 维度 | 说明 |
 |------|------|
-| **推理框架** | vLLM (PagedAttention, Continuous Batching) |
-| **推荐模型** | DeepSeek-R1-Distill-Qwen-32B (INT4) / DeepSeek-R1-70B |
-| **API 兼容** | OpenAI 格式 (可直接被 LlamaIndex/FastAPI 调用) |
-| **量化方案** | AWQ / GPTQ 4-bit (70B 模型 ~140GB → ~40GB) |
-| **部署命令** | 详见 `deploy/infra/docker-compose.yml` 注释段 |
+| **接入方式** | 全部通过 HTTP API，无需本地 GPU |
+| **协议支持** | OpenAI 兼容格式 (`/v1/chat/completions`) + Anthropic Messages (`/v1/messages`) |
+| **供应商** | DeepSeek (推荐)、Claude、OpenAI 等 |
+| **备用模型** | 主模型不可用时自动切换，支持不同供应商交叉备用 |
+| **网络需求** | 需访问对应 API 端点（内网部署 vLLM 服务器也可通过 `LLM_BASE_URL` 指向） |
+
+> **注意**: 嵌入模型 (BGE-M3) 和重排序模型 (BGE-Reranker) 仍在本地运行，需要 GPU 加速（可回退 CPU）。
 
 ---
 
 ## 4. 硬件配置建议
 
-| 规模 | GPU 配置 | 模型选择 | 预估并发 |
-|------|---------|---------|---------|
-| **入门** (10-30人) | 1× RTX 4090 24G | DeepSeek-R1-Distill-Qwen-32B (4-bit) | 10-20 QPS |
-| **标准** (30-100人) | 2-4× RTX 4090 24G | DeepSeek-R1-Distill-Qwen-72B (4-bit) | 30-50 QPS |
-| **推荐** (100-500人) | 4× A100 80G | DeepSeek-R1-70B (FP8/INT4) | 50-100 QPS |
-| **大型** (500+人) | 8× A100 80G | DeepSeek-R1-671B (量化) | 100+ QPS |
+LLM 全部通过 API 接入，**不消耗本地 GPU 资源**。GPU 仅用于嵌入模型 (BGE-M3) 和重排序模型 (BGE-Reranker) 的本地推理。
 
-**额外资源**:
-- **CPU 服务器**: 32 核 + 128GB RAM (Milvus + PostgreSQL + 应用服务)
-- **存储**: 1TB+ NVMe SSD (MinIO + PostgreSQL)
-- **网络**: 10GbE 内网
+| 规模 | 推荐配置 | GPU | 说明 |
+|------|---------|-----|------|
+| **入门** (10-30人) | 16 核 CPU + 64GB RAM | 可选 1× RTX 4090 | 嵌入/重排可回退 CPU |
+| **标准** (30-100人) | 32 核 CPU + 128GB RAM | 1× RTX 4090 24G | GPU 加速嵌入/重排 |
+| **大型** (100-500人) | 64 核 CPU + 256GB RAM | 2× RTX 4090 | 高吞吐嵌入/重排 |
+
+**存储**:
+- **应用数据**: 500GB+ NVMe SSD (Milvus + PostgreSQL + MinIO)
+- **网络**: 1GbE 内网 (LLM API 需出网或可访问内网 API 端点)
 
 ---
 
@@ -655,10 +661,11 @@ Pipeline 在构建上下文时，为每个文档块生成唯一标记：
 ```
 
 **告警阈值**:
-- P99 延迟 > 5s → 告警
+- P99 延迟 > 5s → 告警 (检查 LLM API 延迟和网络)
 - 检索命中率 < 70% → 告警 (需补充知识库)
-- GPU 显存 > 90% → 告警
-- 答案空回复率 > 5% → 告警
+- GPU 显存 > 90% → 告警 (嵌入/重排 GPU)
+- 答案空回复率 > 5% → 告警 (检查 LLM API 和 Pipeline)
+- LLM API 错误率 > 1% → 告警 (检查 API Key 和网络)
 
 ---
 
@@ -723,7 +730,7 @@ Container
 
 #### 双协议支持
 
-系统支持 **两种 API 协议**，通过 `LLM_API_FORMAT` 配置选择：
+系统支持 **两种 API 协议**，通过 `LLM_API_FORMAT` 配置选择。LLM 全部通过 API 接入，不部署本地推理模型：
 
 | 协议 | 类 | 适用供应商 | API 端点 |
 |------|----|-----------|---------|
@@ -734,7 +741,7 @@ Container
 
 | 供应商 | 默认端点 | 需 Key | 适用场景 |
 |--------|---------|--------|---------|
-| `vllm` | `http://localhost:8000/v1` | ❌ | 内网本地推理 |
+| `vllm` | `http://localhost:8000/v1` | ❌ | 内网 vLLM 服务器（可选） |
 | `ollama` | `http://localhost:11434/v1` | ❌ | 本地 Ollama 部署 |
 | `deepseek` | `https://api.deepseek.com` | ✅ | DeepSeek 官方 API |
 | `openai` | `https://api.openai.com/v1` | ✅ | OpenAI GPT 系列 |
@@ -780,17 +787,17 @@ LLM_MAX_RETRIES = 2         # 失败重试次数
 #### 配置示例
 
 ```bash
-# 方案 A: 本地 vLLM + DeepSeek API 备用
+# 方案 A: DeepSeek API (主) + Anthropic Claude (备用)
 LLM_API_FORMAT=openai
-LLM_PROVIDER=vllm
-LLM_MODEL=deepseek-r1
-LLM_BASE_URL=http://localhost:8000/v1
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-chat
+LLM_API_KEY=sk-deepseek-key
 
 LLM_FALLBACK_ENABLED=true
-LLM_FALLBACK_API_FORMAT=openai
-LLM_FALLBACK_PROVIDER=deepseek
-LLM_FALLBACK_MODEL=deepseek-chat
-LLM_FALLBACK_API_KEY=sk-xxxxx
+LLM_FALLBACK_API_FORMAT=anthropic
+LLM_FALLBACK_PROVIDER=anthropic
+LLM_FALLBACK_MODEL=claude-sonnet-4-20250514
+LLM_FALLBACK_API_KEY=sk-ant-key
 
 # 方案 B: Anthropic Claude (带思考模式)
 LLM_API_FORMAT=anthropic
@@ -799,6 +806,13 @@ LLM_MODEL=claude-sonnet-4-20250514
 LLM_API_KEY=sk-ant-xxxxx
 LLM_THINKING_ENABLED=true
 LLM_THINKING_BUDGET=4096
+
+# 方案 C: 内网 vLLM 服务器 (有独立 GPU 机器时)
+LLM_API_FORMAT=openai
+LLM_PROVIDER=vllm
+LLM_MODEL=deepseek-r1
+LLM_BASE_URL=http://gpu-server:8000/v1
+# 无需 API Key，也不配备用模型（内网可用时不需要）
 ```
 
 ### 9.4 Pipeline 编排器

@@ -207,14 +207,9 @@ Authorization: Bearer <token>
 响应为 SSE (Server-Sent Events) 流式输出：
 
 ```
-event: message
-data: {"content": "系统的"}
-
-event: message
-data: {"content": "数据"}
-
-event: done
-data: {"conversation_id": "xxx", "sources": [...]}
+data: {"type": "token", "content": "系统"}
+data: {"type": "token", "content": "的数据"}
+data: {"type": "done", "conversation_id": "xxx", "sources": [...]}
 ```
 
 ---
@@ -306,5 +301,5 @@ data: {"conversation_id": "xxx", "sources": [...]}
 
 ---
 
-> 文档版本: v1.0.0 | 更新日期: 2026-06-05
+> 文档版本: v1.0.1 | 更新日期: 2026-06-06
 > 如有问题请联系系统管理员。

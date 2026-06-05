@@ -2,10 +2,10 @@
 
 ## 项目概述
 
-企业级 RAG 智能问答平台，三个独立服务 + 基础设施：
+企业级 RAG 智能问答平台，LLM 全部通过 API 接入，三个独立服务 + 基础设施：
 
 ```
-frontend/ai-qa-app/     → Next.js 14 (端口 3000)
+frontend/ai-qa-app/     → Next.js 16.2 (端口 3000)
 backend/gateway/        → Go + Gin API 网关 (端口 8080)
 backend/rag-service/    → Python + FastAPI RAG 服务 (端口 8001)
 deploy/infra/           → Docker Compose (PostgreSQL/Redis/Milvus/MinIO)
@@ -41,6 +41,16 @@ Windows 可一键启动: `.\deploy\startup.ps1`
 - API 前缀统一为 `/api/v1/`，健康检查为 `/health`
 - 三个子项目均可独立修改，无跨项目编译依赖
 
+## 测试覆盖
+
+| 项目 | 框架 | 数量 | 覆盖模块 |
+|------|------|------|---------|
+| Go 网关 | Go test | 23 | config/JWT/熔断器 (handler 代理层和 middleware 未覆盖) |
+| Python RAG | pytest | 75 | API/Document/RRF/Pipeline/EventBus/Providers |
+| Next.js 前端 | Vitest | 24 | auth/api/utils |
+
+> 前端和后端测试均可独立运行，不依赖 Docker 基础设施。
+
 ## 环境变量
 
 根目录 `.env.example` 包含所有服务共用的配置模板，复制为 `.env` 后各服务自行读取。
@@ -50,3 +60,5 @@ Windows 可一键启动: `.\deploy\startup.ps1`
 
 - 架构设计: `ARCHITECTURE.md`
 - 项目全景: `overview.md`
+- 部署手册: `docs/deployment-manual.md`
+- 用户手册: `docs/user-manual.md`

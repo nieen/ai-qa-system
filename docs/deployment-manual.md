@@ -28,9 +28,9 @@
 |------|------|------|
 | **CPU** | 16 核 32 线程 | Milvus + PostgreSQL + 应用服务 |
 | **内存** | 64 GB | 16GB (Milvus) + 16GB (应用) + 32GB (OS/缓存) |
-| **GPU** | 1× RTX 4090 24GB | LLM 推理 + 嵌入模型 |
+| **GPU** | 可选 1× RTX 4090 24GB | 仅用于嵌入/重排序模型加速（可回退 CPU）|
 | **硬盘** | 500GB+ NVMe SSD | 向量数据 + 文档存储 |
-| **网络** | 1GbE | 内网通信 |
+| **网络** | 1GbE 内网 + LLM API 出网 | 内网通信 + API 调用 |
 
 ### 1.2 软件依赖
 
@@ -41,8 +41,8 @@
 | **Go** | 1.26.3+ | API 网关（可选手动启动） |
 | **Python** | 3.13+ | RAG 服务（可选手动启动） |
 | **Node.js** | 22+ | 前端（可选手动启动） |
-| **NVIDIA 驱动** | 550+ | GPU 推理 |
-| **CUDA** | 12.4+ | GPU 加速 |
+| **NVIDIA 驱动** | 550+ | GPU 加速嵌入/重排（可选） |
+| **CUDA** | 12.4+ | GPU 加速嵌入/重排（可选） |
 
 ### 1.3 端口占用
 
@@ -372,30 +372,16 @@ REDIS_PASSWORD=your-strong-password
 
 ---
 
-## 8. LLM 模型部署
+## 8. LLM 配置
 
-### 8.1 vLLM（本地推理，推荐）
+系统通过 API 接入 LLM，**不部署本地推理模型**。所有 LLM 调用通过 HTTP API 完成。
 
-```bash
-docker run --gpus all \
-  -v /path/to/models:/models \
-  -p 8000:8000 \
-  vllm/vllm-openai:latest \
-  --model /models/DeepSeek-R1-Distill-Qwen-32B \
-  --port 8000 \
-  --gpu-memory-utilization 0.9 \
-  --tensor-parallel-size 2 \
-  --dtype bfloat16 \
-  --served-model-name deepseek-r1 \
-  --max-model-len 32768
-```
-
-### 8.2 远程 API（无需 GPU）
+### 8.1 配置 API 供应商（推荐）
 
 在 `.env` 中配置供应商和 Key：
 
 ```bash
-# DeepSeek API
+# DeepSeek API（默认推荐 — 性价比高）
 LLM_API_FORMAT=openai
 LLM_PROVIDER=deepseek
 LLM_API_KEY=sk-your-deepseek-api-key
@@ -406,6 +392,36 @@ LLM_API_FORMAT=anthropic
 LLM_PROVIDER=anthropic
 LLM_API_KEY=sk-ant-your-anthropic-api-key
 LLM_MODEL=claude-sonnet-4-20250514
+
+# OpenAI
+LLM_API_FORMAT=openai
+LLM_PROVIDER=openai
+LLM_API_KEY=sk-your-openai-api-key
+LLM_MODEL=gpt-4o
+```
+
+### 8.2 备用模型配置
+
+主模型不可用时自动降级，支持不同供应商交叉备用：
+
+```bash
+LLM_FALLBACK_ENABLED=true
+LLM_FALLBACK_API_FORMAT=openai
+LLM_FALLBACK_PROVIDER=deepseek
+LLM_FALLBACK_MODEL=deepseek-chat
+LLM_FALLBACK_API_KEY=sk-your-backup-key
+```
+
+### 8.3 内网 vLLM 服务器（有独立 GPU 机器时）
+
+如果网络内有独立的 GPU 服务器运行 vLLM，可通过 `LLM_BASE_URL` 指向：
+
+```bash
+LLM_API_FORMAT=openai
+LLM_PROVIDER=vllm
+LLM_MODEL=deepseek-r1
+LLM_BASE_URL=http://gpu-server:8000/v1
+# 内网场景无需 API Key
 ```
 
 ---
@@ -459,9 +475,9 @@ OTEL_SERVICE_NAME=rag-service
 - [ ] JWT secret 已替换为随机字符串
 - [ ] 数据库密码已修改
 - [ ] CORS 已配置为实际域名
-- [ ] GPU 驱动已安装且 `nvidia-smi` 正常
+- [ ] GPU 驱动已安装且 `nvidia-smi` 正常（如需加速嵌入/重排）
 - [ ] Docker Compose 基础设施已启动并健康
-- [ ] LLM 模型已下载或 API Key 已配置
+- [ ] LLM API Key 已配置且网络可达
 - [ ] 防火墙已开放必要端口
 
 ### 10.2 部署后验证
@@ -508,23 +524,22 @@ OTEL_SERVICE_NAME=rag-service
 
 ### Q: 问答时一直 loading，没有响应？
 
-**原因**: LLM 服务不可用或超时。
-**解决**: 检查 `GET /health/llm` 端点。如果是远程 API，检查网络和 API Key。如果是本地 vLLM，检查 GPU 可用性。
+**原因**: LLM API 不可用或网络超时。
+**解决**: 检查 `GET /health/llm` 端点。检查 API Key 是否有效、网络是否可达。如果是配置了内网 vLLM 服务器，检查 GPU 服务器状态。
 
 ### Q: 多副本部署后文档索引重复？
 
 **原因**: 多个 Worker 消费同一 Stream 时，老版本的 `BackgroundTasks` 模式在多个副本间竞争。
 **解决**: 本项目已使用 Redis Streams 消费者组，确保所有 Worker 使用相同的 **group name**（`GROUP_DOC_WORKERS`），Redis 内部会负载均衡。
 
-### Q: GPU 推理时 OOM（显存不足）？
+### Q: 嵌入/重排序模型 OOM（显存不足）？
 
 **解决措施**:
-1. 降低 `gpu-memory-utilization`（vLLM 参数调整为 0.7）
-2. 使用 4-bit 量化模型
-3. 减少 `tensor-parallel-size`
-4. 将嵌入模型和重排序模型移至 CPU 推理（设置 `EMBEDDING_DEVICE=cpu`, `RERANKER_DEVICE=cpu`）
+1. 将嵌入模型和重排序模型移至 CPU 推理（设置 `EMBEDDING_DEVICE=cpu`, `RERANKER_DEVICE=cpu`）
+2. 使用更小的嵌入模型（如 `shibing624/text2vec-base-chinese`，默认即为该模型）
+3. 减少批处理大小
 
 ---
 
-> 文档版本: v1.0.0 | 更新日期: 2026-06-05
+> 文档版本: v1.0.1 | 更新日期: 2026-06-06
 > 如有问题请提交 Issue 或联系系统管理员。
