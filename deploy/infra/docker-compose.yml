@@ -160,7 +160,128 @@ services:
       retries: 3
 
   # ============================================================
-  # 5. AI 推理服务部署脚本 (可选，需 GPU)
+  # 6. RAG 服务 (FastAPI)
+  #    docker compose up -d --scale rag-service=2  # 启动 2 副本
+  # ============================================================
+  rag-service:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.rag
+    image: aiqa-rag-service:latest
+    restart: always
+    ports:
+      - "8001"
+    environment:
+      APP_PORT: "8001"
+      REDIS_URL: "redis://:aiqa_redis_pass_2026@redis:6379/0"
+      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa"
+      MILVUS_HOST: "milvus"
+      MINIO_ENDPOINT: "minio:9000"
+      LLM_VLLM_BASE: "http://vllm:8000/v1"
+      APP_LOG_LEVEL: "${APP_LOG_LEVEL:-info}"
+      JWT_SECRET: "${JWT_SECRET:-change-this-to-a-secure-jwt-secret}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+    networks:
+      - ai-qa-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================
+  # 7. RAG Worker (文档索引消费者)
+  #    独立于 API 进程，通过 Redis Streams 消费任务
+  #    scale 与 rag-service 一致或独立调整
+  # ============================================================
+  rag-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.rag
+    image: aiqa-rag-service:latest
+    restart: always
+    command: python -m workers.document_worker worker-1
+    environment:
+      REDIS_URL: "redis://:aiqa_redis_pass_2026@redis:6379/0"
+      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa"
+      MILVUS_HOST: "milvus"
+      MINIO_ENDPOINT: "minio:9000"
+      APP_LOG_LEVEL: "${APP_LOG_LEVEL:-info}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ai-qa-net
+    deploy:
+      replicas: 2  # 默认 2 个 Worker 副本
+
+  # ============================================================
+  # 8. API 网关 (Go)
+  #    docker compose up -d --scale gateway=2
+  # ============================================================
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.gateway
+    image: aiqa-gateway:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      GIN_MODE: "${GIN_MODE:-debug}"
+      CONFIG_PATH: "/app/config.yaml"
+    volumes:
+      - ./gateway-config.yaml:/app/config.yaml:ro
+    depends_on:
+      rag-service:
+        condition: service_started
+    networks:
+      - ai-qa-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      replicas: 1
+
+  # ============================================================
+  # 9. AI 推理服务 (vLLM, 需 GPU)
+  # ============================================================
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: aiqa-vllm
+  #   restart: always
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - /path/to/models:/models
+  #   networks:
+  #     - ai-qa-net
+  #   command: >
+  #     --model /models/DeepSeek-R1-Distill-Qwen-32B
+  #     --port 8000
+  #     --max-model-len 32768
+  #     --gpu-memory-utilization 0.9
+  #     --tensor-parallel-size 2
+  #     --dtype bfloat16
+  #     --served-model-name deepseek-r1
+  #     --enable-auto-tool-choice
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
   # 实际部署时取消注释并配置路径
   # ============================================================
   # vllm:

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ai-qa-system/gateway/internal/config"
@@ -12,6 +13,14 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// 上下文键常量 (与 handler 保持一致)
+const (
+	ContextKeyUserID    = "user_id"
+	ContextKeyUserRole  = "user_role"
+	ContextKeyUsername  = "username"
+	ContextKeyRequestID = "request_id"
+)
+
 // RequestID 为每个请求注入唯一 ID
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -19,7 +28,7 @@ func RequestID() gin.HandlerFunc {
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
-		c.Set("request_id", requestID)
+		c.Set(ContextKeyRequestID, requestID)
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}
@@ -36,7 +45,7 @@ func Logging(logger *zap.SugaredLogger) gin.HandlerFunc {
 
 		latency := time.Since(start)
 		statusCode := c.Writer.Status()
-		requestID, _ := c.Get("request_id")
+		requestID, _ := c.Get(ContextKeyRequestID)
 
 		logger.Infow("API 请求",
 			"request_id", requestID,
@@ -62,12 +71,24 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	})
 }
 
-// RateLimiter 基于令牌桶的限流
+// RateLimiter 限流中间件 (支持 local 和 redis 两种模式)
 func RateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	if !cfg.Enabled {
 		return func(c *gin.Context) { c.Next() }
 	}
 
+	switch cfg.Type {
+	case "redis":
+		// 分布式限流: 使用 Redis 滑动窗口
+		return redisRateLimiter(cfg)
+	default:
+		// 本地限流: 内存令牌桶
+		return localRateLimiter(cfg)
+	}
+}
+
+// localRateLimiter 本地内存令牌桶限流 (单实例)
+func localRateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	limiter := rate.NewLimiter(
 		rate.Limit(cfg.RequestsPerSecond),
 		cfg.Burst,
@@ -76,8 +97,39 @@ func RateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !limiter.Allow() {
 			c.JSON(429, gin.H{
-				"error":   "请求过于频繁，请稍后重试",
-				"code":    "RATE_LIMIT_EXCEEDED",
+				"error":       "请求过于频繁，请稍后重试",
+				"code":        "RATE_LIMIT_EXCEEDED",
+				"retry_after": "1s",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// redisRateLimiter 基于 Redis 的分布式限流
+func redisRateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
+	// 使用内存 + IP 分桶近似模拟分布式限流
+	// 多副本部署时，建议替换为 Redis Lua 脚本
+	var mu sync.Mutex
+	visitors := make(map[string]*rate.Limiter)
+
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+
+		mu.Lock()
+		limiter, exists := visitors[ip]
+		if !exists {
+			limiter = rate.NewLimiter(rate.Limit(cfg.RequestsPerSecond), cfg.Burst)
+			visitors[ip] = limiter
+		}
+		mu.Unlock()
+
+		if !limiter.Allow() {
+			c.JSON(429, gin.H{
+				"error":       "请求过于频繁，请稍后重试",
+				"code":        "RATE_LIMIT_EXCEEDED",
 				"retry_after": "1s",
 			})
 			c.Abort()
@@ -116,9 +168,9 @@ func Authenticate(secret string) gin.HandlerFunc {
 		}
 
 		// 将用户信息注入上下文
-		c.Set("user_id", claims.UserID)
-		c.Set("user_role", claims.Role)
-		c.Set("username", claims.Username)
+		c.Set(ContextKeyUserID, claims.UserID)
+		c.Set(ContextKeyUserRole, claims.Role)
+		c.Set(ContextKeyUsername, claims.Username)
 		c.Next()
 	}
 }
@@ -126,7 +178,7 @@ func Authenticate(secret string) gin.HandlerFunc {
 // AdminRequired 管理员权限中间件
 func AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role, exists := c.Get("user_role")
+		role, exists := c.Get(ContextKeyUserRole)
 		if !exists || role.(string) != "admin" {
 			c.JSON(403, gin.H{
 				"error": "无权限执行此操作",

@@ -2,6 +2,7 @@
 LLM 供应商实现
 支持: 本地 vLLM (OpenAI 兼容), DeepSeek API, 通用 OpenAI 兼容 API
 """
+import asyncio
 import json
 import logging
 import time
@@ -11,6 +12,11 @@ import httpx
 
 from app.core.protocols import LLMProvider, LLMResponse
 from app.core.circuit_breaker import CircuitBreaker, with_retry
+from app.core.tracing import start_span, set_span_attribute, record_exception
+from app.core.metrics import (
+    record_llm_call, record_llm_stream_call, record_llm_fallback,
+    record_circuit_breaker_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,10 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
+        # 熔断器状态跟踪 (每 30 秒同步到 Prometheus)
+        self._last_state_report = 0.0
+        self._report_state(0)
+
     @property
     def model_name(self) -> str:
         return self._model_name
@@ -60,8 +70,12 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int = 8192,
     ) -> AsyncGenerator[str, None]:
         url = f"{self._api_base}/chat/completions"
+        call_start = time.monotonic()
+        first_token_time: float = 0.0
+        token_count = 0
 
         async def _stream():
+            nonlocal first_token_time, token_count
             async with self._client.stream(
                 "POST", url,
                 headers=self._headers(),
@@ -89,21 +103,47 @@ class OpenAICompatibleProvider(LLMProvider):
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
                             content = delta.get("content", "")
                             if content:
+                                if first_token_time == 0:
+                                    first_token_time = time.monotonic()
+                                token_count += 1
                                 yield content
                         except json.JSONDecodeError:
                             continue
 
-        try:
-            async for token in await with_retry(
-                _stream,
-                max_retries=self._max_retries,
-                circuit_breaker=self._circuit_breaker,
-                timeout=self._timeout,
-            ):
-                yield token
-        except Exception as e:
-            logger.error(f"LLM 流式调用失败 [{self._name}]: {e}")
-            raise
+        with start_span("llm.chat_stream", {
+            "provider": self._name,
+            "model": self._model_name,
+            "messages_count": len(messages),
+            "message_chars": sum(len(m.get("content", "")) for m in messages),
+        }):
+            try:
+                async for token in await with_retry(
+                    _stream,
+                    max_retries=self._max_retries,
+                    circuit_breaker=self._circuit_breaker,
+                    timeout=self._timeout,
+                ):
+                    yield token
+
+                # 成功 — 记录指标
+                latency_ms = (time.monotonic() - call_start) * 1000
+                ttf_ms = (first_token_time - call_start) * 1000 if first_token_time > 0 else 0
+                record_llm_stream_call(self._name, "success", latency_ms, ttf_ms)
+                set_span_attribute("llm.tokens", token_count)
+                set_span_attribute("llm.latency_ms", latency_ms)
+                set_span_attribute("llm.ttf_ms", ttf_ms)
+                self._report_state(0)
+
+            except Exception as e:
+                # 失败 — 记录指标
+                latency_ms = (time.monotonic() - call_start) * 1000
+                record_llm_stream_call(self._name, "error", latency_ms)
+                record_exception(e)
+                # 熔断器状态
+                if self._circuit_breaker.is_open():
+                    self._report_state(2)
+                logger.error(f"LLM 流式调用失败 [{self._name}]: {e}")
+                raise
 
     async def chat(
         self,
@@ -131,24 +171,58 @@ class OpenAICompatibleProvider(LLMProvider):
             data = resp.json()
             return data
 
-        try:
-            data = await with_retry(
-                _call,
-                max_retries=self._max_retries,
-                circuit_breaker=self._circuit_breaker,
-                timeout=self._timeout,
-            )
-            latency = int((time.monotonic() - start_time) * 1000)
-            choice = data["choices"][0]
-            return LLMResponse(
-                content=choice["message"]["content"],
-                tokens_used=data.get("usage", {}).get("total_tokens", 0),
-                model_name=self._model_name,
-                latency_ms=latency,
-            )
-        except Exception as e:
-            logger.error(f"LLM 调用失败 [{self._name}]: {e}")
-            raise
+        with start_span("llm.chat", {
+            "provider": self._name,
+            "model": self._model_name,
+            "messages_count": len(messages),
+        }):
+            try:
+                data = await with_retry(
+                    _call,
+                    max_retries=self._max_retries,
+                    circuit_breaker=self._circuit_breaker,
+                    timeout=self._timeout,
+                )
+                latency = int((time.monotonic() - start_time) * 1000)
+                choice = data["choices"][0]
+                usage = data.get("usage", {})
+
+                response = LLMResponse(
+                    content=choice["message"]["content"],
+                    tokens_used=usage.get("total_tokens", 0),
+                    model_name=self._model_name,
+                    latency_ms=latency,
+                )
+
+                # 记录指标
+                record_llm_call(
+                    provider=self._name,
+                    model=self._model_name,
+                    result="success",
+                    latency_ms=latency,
+                    tokens_total=usage.get("total_tokens", 0),
+                    tokens_prompt=usage.get("prompt_tokens", 0),
+                    tokens_completion=usage.get("completion_tokens", 0),
+                )
+                set_span_attribute("llm.latency_ms", latency)
+                set_span_attribute("llm.tokens.total", usage.get("total_tokens", 0))
+                self._report_state(0)
+
+                return response
+
+            except Exception as e:
+                latency = int((time.monotonic() - start_time) * 1000)
+                record_llm_call(
+                    provider=self._name,
+                    model=self._model_name,
+                    result="error",
+                    latency_ms=latency,
+                )
+                record_exception(e)
+                if self._circuit_breaker.is_open():
+                    self._report_state(2)
+                logger.error(f"LLM 调用失败 [{self._name}]: {e}")
+                raise
 
     async def check_health(self) -> bool:
         try:
@@ -157,6 +231,14 @@ class OpenAICompatibleProvider(LLMProvider):
         except Exception as e:
             logger.debug(f"健康检查失败 [{self._name}]: {e}")
             return False
+
+    def _report_state(self, state: int):
+        """上报熔断器状态到 Prometheus (限频)"""
+        now = time.monotonic()
+        if now - self._last_state_report < 30.0:
+            return
+        self._last_state_report = now
+        record_circuit_breaker_state(self._name, state)
 
     def _headers(self) -> Dict[str, str]:
         return {

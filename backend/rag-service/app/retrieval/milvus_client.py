@@ -1,22 +1,22 @@
 """
 Milvus 向量数据库客户端
-负责向量存储、混合检索（稠密+稀疏+BM25）
+负责向量存储、混合检索（稠密语义检索 + BM25 关键词匹配）
 """
 import json
 import logging
 from typing import List, Optional, Dict, Any
 
 from config.settings import settings
-from app.core.protocols import VectorStore, KeywordStore, Document as DocModel, RetrievedChunk
+from app.core.protocols import VectorStore, KeywordStore, Document, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
 
 class MilvusClient(VectorStore):
     """Milvus 向量数据库客户端"""
-    
-    # 注意: 实例由 Container 管理，不在此使用全局单例
-    _is_initialized = False
+
+    def __init__(self):
+        self._is_initialized = False
 
     async def initialize(self):
         if self._is_initialized:
@@ -121,7 +121,7 @@ class MilvusClient(VectorStore):
     async def insert(
         self,
         collection_name: str,
-        documents: List[DocModel],
+        documents: List[Document],
         embeddings: List[List[float]],
     ):
         """
@@ -264,12 +264,10 @@ def _parse_metadata(raw: Any) -> Dict[str, Any]:
 class MilvusKeywordStore(KeywordStore):
     """
     Milvus 关键词检索实现 (利用 Milvus 内置 BM25)
-
-    实现了 KeywordStore 接口，不依赖向量库是否支持混合检索。
-    PGVector 用户可替换为 PGFTSStore (PostgreSQL 全文检索)。
     """
 
-    _is_initialized = False
+    def __init__(self):
+        self._is_initialized = False
 
     async def initialize(self):
         self._is_initialized = True
@@ -341,5 +339,4 @@ class MilvusKeywordStore(KeywordStore):
         pass
 
 
-# 全局单例
-milvus_client = MilvusClient()
+# 全局单例由 Container 管理，不在模块层面创建

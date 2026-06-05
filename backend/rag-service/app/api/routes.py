@@ -1,22 +1,22 @@
 """
-RAG 服务 API 路由 (重构版)
+RAG 服务 API 路由
 仅处理 HTTP 请求/响应序列化，业务逻辑委托给 Pipeline + Container
 
 异步任务策略:
-  - 实时问答 → async/await + SSE 流式 (不走 Celery)
-  - 文档索引 → FastAPI BackgroundTasks (轻量, 零额外依赖)
-  - 批量处理 → 由外部编排或独立的 Worker 进程处理
+  - 实时问答 → async/await + SSE 流式
+  - 文档索引 → Redis Streams (支持多副本、重试、持久化)
+  - 批量处理 → 独立的 Worker 进程消费 Stream
 """
 import json
 import logging
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.container import get_vector_store, get_embedding_model, get_pipeline, get_llm_router
-from app.ingestion.document_processor import document_processor
+from app.core.container import get_vector_store, get_pipeline, get_llm_router
+from app.core.event_bus import event_bus, STREAM_DOC_INGESTION, GROUP_DOC_WORKERS
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -104,14 +104,21 @@ async def list_documents(kb_id: str):
 async def upload_document(
     kb_id: str,
     file: UploadFile = File(...),
-    bg: BackgroundTasks = BackgroundTasks(),
 ):
     """
-    上传文档 (异步索引)
+    上传文档 (通过 Redis Streams 异步索引)
 
     流程:
-      1. 保存文件到临时目录 → 立即返回 "processing" 状态
-      2. 后台任务: 解析 → 向量化 → 存储到 Milvus
+      1. 保存文件到临时目录 → 发布消息到 Redis Stream
+      2. 立即返回 "processing" 状态
+      3. Worker 进程消费 Stream: 解析 → 向量化 → 存储到 Milvus
+      4. Worker 发布完成状态到 status Stream
+      5. 前端可通过 /documents/{doc_id}/status 轮询结果
+
+    多副本部署:
+      - 多个 Worker 在同一消费者组中竞争消费
+      - 崩溃 Worker 的任务被其他 Worker 认领 (XCLAIM)
+      - 超过 MAX_DELIVERY_COUNT 的消息标记为死信
 
     支持格式: pdf, docx, md, html, txt
     """
@@ -123,7 +130,7 @@ async def upload_document(
     if file_type not in supported_types:
         raise HTTPException(400, f"不支持的文件类型: {file_type}")
 
-    import tempfile, os
+    import os
     os.makedirs("tmp", exist_ok=True)
     tmp_path = f"tmp/{uuid.uuid4()}_{file.filename}"
     content = await file.read()
@@ -132,68 +139,33 @@ async def upload_document(
 
     doc_id = str(uuid.uuid4())
 
-    # 后台异步索引 (FastAPI BackgroundTasks, 零额外依赖)
-    bg.add_task(_index_document_background, kb_id, doc_id, tmp_path, file_type, file.filename)
+    # 发布任务到 Redis Stream
+    msg_id = await event_bus.publish(
+        STREAM_DOC_INGESTION,
+        "doc.index",
+        {
+            "kb_id": kb_id,
+            "doc_id": doc_id,
+            "file_path": tmp_path,
+            "file_type": file_type,
+            "file_name": file.filename,
+        },
+    )
+
+    if msg_id:
+        logger.info(f"文档索引任务已入队: {file.filename} -> stream_id={msg_id}")
+        status_msg = "文档已加入索引队列 (Redis Streams)"
+    else:
+        logger.warning(f"事件总线不可用，文件将不会被索引: {file.filename}")
+        status_msg = "文档已保存但事件总线不可用，请检查 Redis 连接"
 
     return {
         "id": doc_id,
         "title": file.filename,
         "file_type": file_type,
         "status": "processing",
-        "message": "文档已加入索引队列，将在后台处理",
+        "message": status_msg,
     }
-
-
-async def _index_document_background(
-    kb_id: str,
-    doc_id: str,
-    file_path: str,
-    file_type: str,
-    filename: str,
-):
-    """
-    后台文档索引任务
-
-    在 FastAPI BackgroundTasks 中运行，不阻塞 API 响应。
-    多副本部署时: 每个副本各自处理自己的后台任务。
-    """
-    import os
-    from app.core.container import get_vector_store, get_embedding_model
-    from app.core.protocols import Document as DocModel
-
-    logger.info(f"开始后台索引文档: {filename}")
-
-    try:
-        chunks = await document_processor.process(file_path, file_type)
-        if not chunks:
-            logger.warning(f"文档内容为空: {filename}")
-            return
-
-        texts = [c["content"] for c in chunks]
-        embedding_model = get_embedding_model()
-        embeddings = await embedding_model.embed_documents(texts)
-
-        documents = [
-            DocModel(
-                chunk_id=str(uuid.uuid4()),
-                document_id=doc_id,
-                kb_id=kb_id,
-                chunk_index=c["chunk_index"],
-                content=c["content"],
-                metadata=c["metadata"],
-            )
-            for c in chunks
-        ]
-
-        vector_store = get_vector_store()
-        await vector_store.insert(kb_id, documents, embeddings)
-
-        logger.info(f"后台索引完成: {filename} → {len(chunks)} 个块")
-    except Exception as e:
-        logger.error(f"后台索引失败 [{filename}]: {e}")
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
 
 
 @router.delete("/knowledge-bases/{kb_id}/documents/{doc_id}")
@@ -205,7 +177,15 @@ async def delete_document(kb_id: str, doc_id: str):
 
 @router.get("/knowledge-bases/{kb_id}/documents/{doc_id}/status")
 async def get_document_status(kb_id: str, doc_id: str):
-    return {"id": doc_id, "status": "indexed"}
+    """
+    查询文档索引状态
+    从 Redis Streams 状态 Stream 中查询最新状态
+    状态: processing / completed / failed
+    """
+    status = await event_bus.get_doc_status(doc_id)
+    if status:
+        return {"id": doc_id, **status}
+    return {"id": doc_id, "status": "queued", "message": "文档正在队列中等待处理"}
 
 
 # ==================== 核心问答 (使用 Pipeline) ====================

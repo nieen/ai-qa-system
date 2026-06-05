@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ai-qa-system/gateway/internal/config"
+	"github.com/ai-qa-system/gateway/internal/handler"
 	"github.com/ai-qa-system/gateway/internal/middleware"
 	"github.com/ai-qa-system/gateway/internal/router"
 
@@ -34,12 +35,17 @@ func main() {
 	// 设置 Gin 模式
 	gin.SetMode(cfg.Server.Mode)
 
+	// 初始化指标收集和处理器
+	metrics := middleware.NewMetrics()
+	h := handler.NewHandler(cfg, logger)
+
 	// 初始化路由引擎
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// 注册全局中间件
+	// 注册全局中间件 (顺序: RequestID → Metrics → Logging → CORS → RateLimiter)
 	r.Use(middleware.RequestID())
+	r.Use(metrics.MetricsMiddleware())
 	r.Use(middleware.Logging(logger))
 	r.Use(middleware.CORS(cfg.CORS))
 	r.Use(middleware.RateLimiter(cfg.RateLimit))
@@ -52,6 +58,12 @@ func main() {
 			"time":    time.Now().UTC().Format(time.RFC3339),
 		})
 	})
+
+	// 下游服务健康检查
+	r.GET("/health/downstream", h.CheckDownstreamHealth)
+
+	// Prometheus 指标端点
+	r.GET("/metrics", middleware.MetricsHandler())
 
 	// 注册 API 路由
 	router.RegisterRoutes(r, cfg, logger)

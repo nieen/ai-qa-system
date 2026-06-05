@@ -3,6 +3,7 @@ RAG 服务配置
 支持通过环境变量覆盖，优先级: 环境变量 > .env 文件 > 默认值
 """
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
@@ -10,6 +11,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI-QA-RAG-Service"
     APP_PORT: int = 8001
     APP_LOG_LEVEL: str = "info"
+    APP_LOG_FORMAT: str = "console"  # console | json
     APP_SECRET_KEY: str = "change-this-to-a-random-secret-key"
 
     # --- 数据库 (PostgreSQL) ---
@@ -105,9 +107,19 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_HOURS: int = 24
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # --- CORS ---
+    # 逗号分隔的允许来源，默认全放通 (开发环境)
+    CORS_ALLOWED_ORIGINS: str = "*"
+
+    # ============ OpenTelemetry 追踪 ============
+    OTEL_ENABLED: bool = True
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""  # 空 = 仅日志输出
+    OTEL_SERVICE_NAME: str = "rag-service"
+
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
 
 settings = Settings()

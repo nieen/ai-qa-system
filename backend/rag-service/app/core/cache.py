@@ -20,13 +20,8 @@ class ConversationCache:
       Tier 2: PostgreSQL (冷数据, 永久存储)
     """
 
-    _instance = None
-    _redis = None
-
-    def __new__(cls) -> "ConversationCache":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    def __init__(self):
+        self._redis = None
 
     async def initialize(self) -> None:
         """初始化 Redis 连接"""

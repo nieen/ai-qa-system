@@ -10,7 +10,7 @@ import (
 )
 
 // RegisterRoutes 注册所有 API 路由
-func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger) {
+func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger) *handler.Handler {
 	// 初始化 handler
 	h := handler.NewHandler(cfg, logger)
 
@@ -46,9 +46,9 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		protected.DELETE("/knowledge-bases/:kbId/documents/:docId", h.DeleteDocument)
 		protected.GET("/knowledge-bases/:kbId/documents/:docId/status", h.GetDocumentStatus)
 
-		// 问答
-		protected.POST("/kb/:kbId/chat", h.Chat)
-		protected.GET("/chat/:convId/messages", h.GetMessages)
+		// 问答 & 消息
+		protected.POST("/knowledge-bases/:kbId/chat", h.Chat)
+		protected.GET("/conversations/:convId/messages", h.GetMessages)
 
 		// 对话管理
 		protected.GET("/conversations", h.ListConversations)
@@ -68,4 +68,5 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 	}
 
 	logger.Infof("已注册 %d 个路由端点", len(r.Routes()))
+	return h
 }

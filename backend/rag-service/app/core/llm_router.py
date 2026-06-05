@@ -6,6 +6,8 @@ import logging
 from typing import Any, AsyncGenerator, List, Dict, Optional
 
 from app.core.protocols import LLMProvider, LLMResponse
+from app.core.metrics import record_llm_fallback
+from app.core.tracing import start_span, set_span_attribute
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,11 @@ class LLMRouter:
         self._current = self._fallback
         self._is_fallback_mode = True
         self._total_fallbacks += 1
+
+        # 记录降级指标
+        primary_name = getattr(self._primary, "_name", "unknown")
+        fallback_name = getattr(self._fallback, "_name", "unknown")
+        record_llm_fallback(primary_name, fallback_name)
 
         yield "\n\n> (由备用模型 [%s] 回答)\n\n" % self._fallback.model_name
 

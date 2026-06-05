@@ -15,12 +15,35 @@ from app.api.routes import router as api_router
 from app.core.database import init_db, close_db
 from app.core.container import container
 from app.core.cache import conversation_cache
+from app.core.event_bus import event_bus
+from app.core.metrics import register_metrics_endpoint
+from app.core.tracing import setup_tracing, instrument_app, shutdown_tracing
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, settings.APP_LOG_LEVEL.upper()),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+# 配置日志 - JSON 结构化输出 (生产环境)
+if settings.APP_LOG_FORMAT == "json":
+    import json as json_module
+
+    class JSONFormatter(logging.Formatter):
+        """JSON 日志格式化器"""
+        def format(self, record):
+            log_entry = {
+                "timestamp": self.formatTime(record),
+                "level": record.levelname,
+                "name": record.name,
+                "message": record.getMessage(),
+            }
+            if record.exc_info and record.exc_info[0]:
+                log_entry["exception"] = self.formatException(record.exc_info)
+            return json_module.dumps(log_entry, ensure_ascii=False)
+
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(JSONFormatter())
+    logging.basicConfig(level=getattr(logging, settings.APP_LOG_LEVEL.upper()), handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=getattr(logging, settings.APP_LOG_LEVEL.upper()),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -37,10 +60,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()
     await container.initialize_all()
 
+    # 初始化 OpenTelemetry 追踪
+    tracing_ok = setup_tracing()
+    if tracing_ok:
+        instrument_app(app)
+
     logger.info(f"{settings.APP_NAME} 启动完成，端口: {settings.APP_PORT}")
     yield
 
     # 关闭时清理
+    shutdown_tracing()
     await container.close_all()
     await close_db()
     logger.info(f"{settings.APP_NAME} 已关闭")
@@ -53,17 +82,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS 配置
+# CORS 配置 (生产环境需限制 origin)
+cors_origins = settings.CORS_ALLOWED_ORIGINS.split(",") if settings.CORS_ALLOWED_ORIGINS else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
 
 # 注册路由
 app.include_router(api_router, prefix="/api/v1")
+
+# 注册指标端点 (Prometheus)
+register_metrics_endpoint(app)
 
 
 @app.get("/health")

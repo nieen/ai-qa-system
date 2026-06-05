@@ -3,6 +3,7 @@
 """
 import logging
 from typing import AsyncGenerator
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -34,7 +35,7 @@ async def init_db() -> None:
     try:
         # 测试连接
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         logger.info("数据库连接成功")
     except Exception as e:
         logger.warning(f"数据库连接失败: {e}")
