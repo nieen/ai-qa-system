@@ -62,6 +62,18 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+// Login 用户登录
+// @Summary     用户登录
+// @Description 验证用户名密码，返回 JWT Token
+// @Tags        认证
+// @Accept      json
+// @Produce     json
+// @Param       body body LoginRequest true "登录信息"
+// @Success     200 {object} map[string]interface{} "登录成功，返回 token 和用户信息"
+// @Failure     401 {object} map[string]interface{} "用户名或密码错误"
+// @Failure     403 {object} map[string]interface{} "账户已被禁用"
+// @Failure     502 {object} map[string]interface{} "认证服务暂不可用"
+// @Router      /auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -140,6 +152,17 @@ type RegisterRequest struct {
 	AcceptedPrivacyPolicy bool   `json:"accepted_privacy_policy"`
 }
 
+// Register 用户注册
+// @Summary     用户注册
+// @Description 创建新用户，需要同意隐私政策
+// @Tags        认证
+// @Accept      json
+// @Produce     json
+// @Param       body body RegisterRequest true "注册信息"
+// @Success     200 {object} map[string]interface{} "注册成功"
+// @Failure     400 {object} map[string]interface{} "请求参数错误或未同意隐私政策"
+// @Failure     409 {object} map[string]interface{} "用户名已存在"
+// @Router      /auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -209,6 +232,15 @@ func (h *Handler) Register(c *gin.Context) {
 
 // ==================== 用户管理（网关直接查询数据库）====================
 
+// GetProfile 获取用户信息
+// @Summary     获取当前用户信息
+// @Description 获取已登录用户的详细个人信息
+// @Tags        用户管理
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} map[string]interface{} "用户信息"
+// @Failure     401 {object} map[string]interface{} "未认证"
+// @Router      /user/profile [get]
 func (h *Handler) GetProfile(c *gin.Context) {
 	userID := c.GetString(ctxKeyUserID)
 	user, err := database.GetUserByID(userID)
@@ -240,6 +272,14 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 // ==================== 数据合规 (PIPL) ====================
 
 // ExportData 导出用户个人数据 (PIPL 第45条 — 数据可携带权)
+// ExportData 导出用户数据 (PIPL §45)
+// @Summary     导出个人数据
+// @Description 导出当前用户的所有个人数据（资料、对话、文档），符合 PIPL 第 45 条数据可携带权
+// @Tags        数据合规
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} map[string]interface{} "用户数据"
+// @Router      /user/export [get]
 func (h *Handler) ExportData(c *gin.Context) {
 	userID := c.GetString(ctxKeyUserID)
 
@@ -263,6 +303,14 @@ func (h *Handler) ExportData(c *gin.Context) {
 }
 
 // Logout 登出 — 将当前 Token 加入黑名单
+// Logout 用户登出
+// @Summary     用户登出
+// @Description 登出当前用户，将当前 Token 加入黑名单吊销
+// @Tags        用户管理
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} map[string]interface{} "登出成功"
+// @Router      /user/logout [post]
 func (h *Handler) Logout(c *gin.Context) {
 	token := c.GetHeader("Authorization")
 	if len(token) > 7 && token[:7] == "Bearer " {
@@ -290,6 +338,14 @@ func (h *Handler) Logout(c *gin.Context) {
 }
 
 // RequestDeletion 请求删除账号 (PIPL 第47条 — 被遗忘权)
+// RequestDeletion 请求删除账号 (PIPL §47)
+// @Summary     请求删除账号
+// @Description 创建删除账号请求（7天冷静期），符合 PIPL 第 47 条被遗忘权
+// @Tags        数据合规
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} map[string]interface{} "删除请求已创建"
+// @Router      /user/delete-request [post]
 func (h *Handler) RequestDeletion(c *gin.Context) {
 	userID := c.GetString(ctxKeyUserID)
 
@@ -386,6 +442,13 @@ func (h *Handler) AdminCleanup(c *gin.Context) {
 
 // ==================== 知识库 ====================
 
+// ListKnowledgeBases 获取知识库列表
+// @Summary     获取知识库列表
+// @Tags        知识库
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} map[string]interface{} "知识库列表"
+// @Router      /knowledge-bases [get]
 func (h *Handler) ListKnowledgeBases(c *gin.Context) {
 	h.proxyToRAGService(c, "GET", "/knowledge-bases", nil)
 }
@@ -475,6 +538,16 @@ func (h *Handler) GetDocumentStatus(c *gin.Context) {
 
 // ==================== 问答 ====================
 
+// Chat 知识库问答 (SSE 流式)
+// @Summary     知识库问答
+// @Description 发送问题进行知识库问答，返回 SSE 流式响应
+// @Tags        问答
+// @Accept      json
+// @Produce     text/event-stream
+// @Security    BearerAuth
+// @Param       kbId path string true "知识库 ID"
+// @Success     200 {string} string "SSE 事件流"
+// @Router      /knowledge-bases/{kbId}/chat [post]
 func (h *Handler) Chat(c *gin.Context) {
 	kbID := c.Param("kbId")
 	userID := c.GetString(ctxKeyUserID)

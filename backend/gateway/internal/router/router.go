@@ -1,6 +1,9 @@
 package router
 
 import (
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
 	"github.com/ai-qa-system/gateway/internal/config"
 	"github.com/ai-qa-system/gateway/internal/handler"
 	"github.com/ai-qa-system/gateway/internal/middleware"
@@ -23,6 +26,9 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		public.POST("/auth/login", h.Login)
 		public.POST("/auth/register", h.Register)
 	}
+
+	// ---- Swagger 文档 ----
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// ---- 需要认证的端点 ----
 	protected := r.Group("/api/v1")

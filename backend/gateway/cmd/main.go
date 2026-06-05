@@ -1,5 +1,42 @@
 package main
 
+// @title           AI QA System API
+// @version         1.0.0
+// @description     企业级 AI 智能问答系统 - API 网关
+// @description
+// @description     ## 服务架构
+// @description     - **API 网关** (本服务) → 认证/限流/路由/熔断
+// @description     - **RAG 服务** → 文档索引/向量检索/LLM 问答
+// @description     - **PostgreSQL** → 用户/对话/审计日志
+// @description     - **Redis** → 缓存/分布式限流/Token 黑名单
+// @description     - **Milvus** → 向量数据库
+// @description
+// @description     ## 认证方式
+// @description     ```
+// @description     POST /api/v1/auth/login  →  获取 JWT Token
+// @description     Authorization: Bearer <token>  →  访问受保护端点
+// @description     ```
+// @description
+// @description     ## 数据合规
+// @description     - 数据导出: GET /api/v1/user/export (PIPL §45)
+// @description     - 删除账户: POST /api/v1/user/delete-request (PIPL §47)
+// @description     - 审计日志: 所有写操作自动记录
+// @termsOfService  https://github.com/nieen/ai-qa-system
+
+// @contact.name   AI QA System Team
+// @contact.url    https://github.com/nieen/ai-qa-system
+
+// @license.name  MIT
+// @license.url   https://opensource.org/licenses/MIT
+
+// @host      localhost:8080
+// @BasePath  /api/v1
+
+// @securityDefinitions.apikey  BearerAuth
+// @in                          header
+// @name                        Authorization
+// @description                 JWT Token (格式: Bearer \<token\>)
+
 import (
 	"context"
 	"log"
@@ -13,6 +50,9 @@ import (
 	"github.com/ai-qa-system/gateway/internal/database"
 	"github.com/ai-qa-system/gateway/internal/middleware"
 	"github.com/ai-qa-system/gateway/internal/router"
+
+	// Swagger 文档 (go generate 生成)
+	_ "github.com/ai-qa-system/gateway/docs"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"

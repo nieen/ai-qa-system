@@ -78,8 +78,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
-    description="企业级 AI 智能问答系统 - RAG 服务",
+    description="""企业级 AI 智能问答系统 - RAG 服务
+
+提供文档索引、向量检索、混合检索（稠密语义 + BM25 关键词）、
+Reranker 重排序、LLM 流式问答等核心 RAG 能力。
+
+## 认证说明
+用户认证由 Go API 网关处理，RAG 服务不参与认证。
+已认证用户信息通过 `X-User-ID` / `X-User-Role` Header 透传。
+
+## 异步任务
+文档索引通过 Redis Streams 实现异步处理，支持多副本 Worker 负载均衡。
+
+## 相关服务
+- **API 网关**: http://localhost:8080 (管理/认证/限流)
+- **Swagger 文档**: http://localhost:8001/docs (本服务)
+- **Prometheus 指标**: http://localhost:8001/metrics
+""",
     lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    contact={
+        "name": "AI QA System Team",
+        "url": "https://github.com/nieen/ai-qa-system",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 # CORS 配置 (生产环境需限制 origin)

@@ -35,14 +35,44 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
+    """聊天请求"""
     question: str
     conversation_id: Optional[str] = None
     history: Optional[List[dict]] = None
 
 
 class KnowledgeBaseCreate(BaseModel):
+    """创建知识库请求"""
     name: str
     description: Optional[str] = ""
+
+
+class KnowledgeBaseResponse(BaseModel):
+    """知识库信息"""
+    id: str
+    name: str
+    status: str
+
+
+class DocumentUploadResponse(BaseModel):
+    """文档上传响应"""
+    id: str
+    title: str
+    file_type: str
+    status: str
+    message: str
+
+
+class LLMStatusResponse(BaseModel):
+    """LLM 状态响应"""
+    status: str
+    primary: bool
+    primary_model: str
+    fallback_model: Optional[str] = None
+    max_total_tokens: int
+    fallback_enabled: bool
+    timeout: float
+    circuit_breaker_threshold: int
 
 
 # 注意: 认证模型 (LoginRequest/RegisterRequest) 在 Go 网关层处理
@@ -51,56 +81,84 @@ class KnowledgeBaseCreate(BaseModel):
 # ==================== 知识库管理 ====================
 
 
-@router.get("/knowledge-bases")
+@router.get(
+    "/knowledge-bases",
+    summary="获取知识库列表",
+    description="返回所有可用的知识库列表及基本信息",
+    tags=["知识库管理"],
+    response_model=dict,
+)
 async def list_knowledge_bases():
+    """获取所有知识库列表"""
     return {
         "data": [{"id": "default", "name": "默认知识库", "document_count": 0, "status": "active"}],
         "total": 1,
     }
 
 
-@router.post("/knowledge-bases")
+@router.post(
+    "/knowledge-bases",
+    summary="创建知识库",
+    description="创建一个新的知识库，并在向量数据库中创建对应的 Collection",
+    tags=["知识库管理"],
+    response_model=KnowledgeBaseResponse,
+)
 async def create_knowledge_base(req: KnowledgeBaseCreate):
+    """创建新的知识库"""
     kb_id = str(uuid.uuid4())
     vector_store = get_vector_store()
     await vector_store.create_collection(kb_id)
     return {"id": kb_id, "name": req.name, "status": "active"}
 
 
-@router.get("/knowledge-bases/{kb_id}")
+@router.get(
+    "/knowledge-bases/{kb_id}",
+    summary="获取知识库详情",
+    description="根据知识库 ID 获取详细信息",
+    tags=["知识库管理"],
+    response_model=KnowledgeBaseResponse,
+)
 async def get_knowledge_base(kb_id: str):
+    """获取指定知识库的信息"""
     return {"id": kb_id, "name": "默认知识库", "status": "active"}
 
 
 # ==================== 文档管理 ====================
 
 
-@router.get("/knowledge-bases/{kb_id}/documents")
+@router.get(
+    "/knowledge-bases/{kb_id}/documents",
+    summary="获取文档列表",
+    description="获取指定知识库下的所有文档列表",
+    tags=["文档管理"],
+)
 async def list_documents(kb_id: str):
+    """获取知识库中的文档列表"""
     return {"data": [], "total": 0}
 
 
-@router.post("/knowledge-bases/{kb_id}/documents/upload")
+@router.post(
+    "/knowledge-bases/{kb_id}/documents/upload",
+    summary="上传文档",
+    description="""
+    上传文档并通过 Redis Streams 异步索引。
+
+    **流程:**
+    1. 保存文件到临时目录 → 发布消息到 Redis Stream
+    2. 立即返回 "processing" 状态
+    3. Worker 进程消费 Stream: 解析 → 向量化 → 存储到 Milvus
+
+    **支持格式:** pdf, docx, md, html, txt
+    """,
+    tags=["文档管理"],
+    response_model=DocumentUploadResponse,
+)
 async def upload_document(
     kb_id: str,
     file: UploadFile = File(...),
 ):
     """
     上传文档 (通过 Redis Streams 异步索引)
-
-    流程:
-      1. 保存文件到临时目录 → 发布消息到 Redis Stream
-      2. 立即返回 "processing" 状态
-      3. Worker 进程消费 Stream: 解析 → 向量化 → 存储到 Milvus
-      4. Worker 发布完成状态到 status Stream
-      5. 前端可通过 /documents/{doc_id}/status 轮询结果
-
-    多副本部署:
-      - 多个 Worker 在同一消费者组中竞争消费
-      - 崩溃 Worker 的任务被其他 Worker 认领 (XCLAIM)
-      - 超过 MAX_DELIVERY_COUNT 的消息标记为死信
-
-    支持格式: pdf, docx, md, html, txt
     """
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
@@ -148,20 +206,27 @@ async def upload_document(
     }
 
 
-@router.delete("/knowledge-bases/{kb_id}/documents/{doc_id}")
+@router.delete(
+    "/knowledge-bases/{kb_id}/documents/{doc_id}",
+    summary="删除文档",
+    description="从知识库中删除指定文档及其向量数据",
+    tags=["文档管理"],
+)
 async def delete_document(kb_id: str, doc_id: str):
+    """删除知识库中的文档"""
     vector_store = get_vector_store()
     await vector_store.delete_by_document(kb_id, doc_id)
     return {"message": "删除成功"}
 
 
-@router.get("/knowledge-bases/{kb_id}/documents/{doc_id}/status")
+@router.get(
+    "/knowledge-bases/{kb_id}/documents/{doc_id}/status",
+    summary="查询文档索引状态",
+    description="查询文档的异步索引处理状态: processing / completed / failed / queued",
+    tags=["文档管理"],
+)
 async def get_document_status(kb_id: str, doc_id: str):
-    """
-    查询文档索引状态
-    从 Redis Streams 状态 Stream 中查询最新状态
-    状态: processing / completed / failed
-    """
+    """查询文档索引状态"""
     status = await event_bus.get_doc_status(doc_id)
     if status:
         return {"id": doc_id, **status}
@@ -171,15 +236,28 @@ async def get_document_status(kb_id: str, doc_id: str):
 # ==================== 核心问答 (使用 Pipeline) ====================
 
 
-@router.post("/knowledge-bases/{kb_id}/chat")
-async def chat(kb_id: str, req: ChatRequest):
-    """
-    知识库问答 (流式 SSE)
+@router.post(
+    "/knowledge-bases/{kb_id}/chat",
+    summary="知识库问答 (SSE 流式)",
+    description="""
+    执行完整 RAG 流程进行问答，返回 SSE (Server-Sent Events) 流式响应。
 
-    使用 QueryPipeline 执行完整 RAG 流程:
-      Phase 1: NaiveRAGPipeline (检索 → 重排序 → 生成)
-      Phase 2: AgenticRAGPipeline (计划 → 检索 → 反思 → 生成)
-    """
+    **事件类型:**
+    - `token`: LLM 生成的文本片段
+    - `metadata`: 检索结果统计信息
+    - `error`: 处理过程中的错误信息
+    - `done`: 问答完成，包含来源引用
+
+    **流程:**
+    1. 查询向量化 (BGE-M3 / text2vec)
+    2. 向量检索 (Milvus) + BM25 关键词检索
+    3. RRF 融合 + Reranker 重排序
+    4. LLM 流式生成 (支持主/备模型自动降级)
+    """,
+    tags=["问答"],
+)
+async def chat(kb_id: str, req: ChatRequest):
+    """知识库问答 (SSE 流式响应)"""
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "问题不能为空")
@@ -231,7 +309,13 @@ async def chat(kb_id: str, req: ChatRequest):
 # ==================== LLM 状态 ====================
 
 
-@router.get("/llm/status")
+@router.get(
+    "/llm/status",
+    summary="查看 LLM 供应商状态",
+    description="查看当前 LLM 供应商的健康状态、主/备模型信息、熔断器状态等",
+    tags=["LLM 管理"],
+    response_model=LLMStatusResponse,
+)
 async def get_llm_status():
     """查看 LLM 供应商状态"""
     llm_router = get_llm_router()
@@ -245,7 +329,12 @@ async def get_llm_status():
     }
 
 
-@router.post("/llm/reset")
+@router.post(
+    "/llm/reset",
+    summary="重置 LLM 到主模型",
+    description="手动将 LLM 从备用模型切换回主模型",
+    tags=["LLM 管理"],
+)
 async def reset_llm():
     """手动重置 LLM 到主模型"""
     llm_router = get_llm_router()
@@ -253,12 +342,16 @@ async def reset_llm():
     return {"message": "LLM 已重置到主模型"}
 
 
-# ==================== 用户 & 管理 ====================
+# ==================== 管理 ====================
 
-# 注意: 用户认证和用户管理 (登录/注册/用户列表/用户信息) 由 Go 网关直接处理，
-# RAG 服务只保留与知识库能力相关的管理端点。
+# 注意: 用户管理由 Go 网关处理，RAG 服务只保留知识库相关管理端点。
 
-@router.get("/admin/audit-logs")
+@router.get(
+    "/admin/audit-logs",
+    summary="查看审计日志",
+    description="管理员查看系统审计日志（注意：完整审计日志通过网关 /admin/audit-logs 查询）",
+    tags=["管理"],
+)
 async def get_audit_logs():
     """管理员 - 审计日志"""
     return {"data": [], "total": 0}
