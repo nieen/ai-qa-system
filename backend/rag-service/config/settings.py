@@ -41,25 +41,47 @@ class Settings(BaseSettings):
     # simple  = 轻量级内置 BM25 (无需额外服务)
     KEYWORD_STORE_TYPE: str = "milvus"
 
-    # ============ LLM 多供应商配置 ============
+    # ============ LLM 配置 ============
+    #
+    # 设计原则: 按 API 协议区分, 不按部署模式区分
+    #
+    # API 格式 (LLM_API_FORMAT):
+    #   "openai"    → OpenAI 兼容格式 (/v1/chat/completions)
+    #                 适用于: vLLM, OpenAI, DeepSeek, Ollama, Groq 等
+    #   "anthropic" → Anthropic Messages 格式 (/v1/messages)
+    #                 适用于: Claude 系列
+    #
+    # 供应商 (LLM_PROVIDER):
+    #   用于设置默认端点、API Key 策略、指标标签
+    #   "openai"    → https://api.openai.com/v1 (需 Key)
+    #   "deepseek"  → https://api.deepseek.com (需 Key)
+    #   "vllm"      → http://localhost:8000/v1 (无需 Key)
+    #   "ollama"    → http://localhost:11434/v1 (无需 Key)
+    #   "anthropic" → https://api.anthropic.com/v1 (需 Key)
 
-    # --- 主模型 (Primary LLM) ---
-    # 可选: vllm | deepseek | openai
-    LLM_PRIMARY_PROVIDER: str = "vllm"
-    # vLLM 本地
-    LLM_VLLM_BASE: str = "http://localhost:8000/v1"
-    LLM_VLLM_MODEL: str = "deepseek-r1"
-    # DeepSeek 官方 API
-    LLM_DEEPSEEK_API_KEY: str = ""
-    LLM_DEEPSEEK_MODEL: str = "deepseek-chat"
-    # OpenAI 通用兼容
-    LLM_OPENAI_BASE: str = ""
-    LLM_OPENAI_API_KEY: str = ""
-    LLM_OPENAI_MODEL: str = "gpt-4o-mini"
+    # --- 主模型 ---
+    LLM_API_FORMAT: str = "openai"          # openai | anthropic
+    LLM_PROVIDER: str = "vllm"              # 供应商名 (默认端点/Key策略/标签)
+    LLM_MODEL: str = "deepseek-r1"          # 模型名
+    LLM_BASE_URL: str = ""                  # API 端点 (留空自动推导)
+    LLM_API_KEY: str = ""                   # API Key (留空自动推导)
 
-    # --- 备用模型 (Fallback LLM) ---
+    # --- 多模态 ---
+    LLM_SUPPORTS_MULTIMODAL: bool = False   # 模型是否支持图片输入
+
+    # --- 思考/推理模式 ---
+    LLM_THINKING_ENABLED: bool = False      # 是否启用思考模式
+    LLM_THINKING_BUDGET: int = 2048         # 思考 token 预算
+
+    # --- 备用模型 (主模型不可用时自动切换) ---
     LLM_FALLBACK_ENABLED: bool = True
-    LLM_FALLBACK_PROVIDER: str = "deepseek"  # 主模型不可用时切换到 DeepSeek API
+    LLM_FALLBACK_API_FORMAT: str = "openai"
+    LLM_FALLBACK_PROVIDER: str = "deepseek"
+    LLM_FALLBACK_MODEL: str = "deepseek-chat"
+    LLM_FALLBACK_BASE_URL: str = ""
+    LLM_FALLBACK_API_KEY: str = ""
+    LLM_FALLBACK_THINKING_ENABLED: bool = False
+    LLM_FALLBACK_THINKING_BUDGET: int = 1024
 
     # --- LLM 通用参数 ---
     LLM_MAX_TOKENS: int = 8192

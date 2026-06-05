@@ -52,6 +52,10 @@ class CircuitBreaker:
                 logger.info(f"[熔断器] {self.name}: OPEN → HALF_OPEN (恢复超时)")
         return self._state
 
+    def is_open(self) -> bool:
+        """快速检查是否处于熔断开启状态"""
+        return self.state == CircuitState.OPEN
+
     async def call(self, fn: Callable[..., Awaitable], *args, **kwargs):
         """执行受保护调用"""
         state = self.state
