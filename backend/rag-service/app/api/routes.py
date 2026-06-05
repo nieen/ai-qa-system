@@ -2,6 +2,10 @@
 RAG 服务 API 路由
 仅处理 HTTP 请求/响应序列化，业务逻辑委托给 Pipeline + Container
 
+认证说明:
+  用户认证由 Go API 网关直接连接 PostgreSQL 处理（登录/注册/用户管理），
+  RAG 服务不参与认证。已认证的用户信息通过 X-User-ID / X-User-Role Header 透传。
+
 异步任务策略:
   - 实时问答 → async/await + SSE 流式
   - 文档索引 → Redis Streams (支持多副本、重试、持久化)
@@ -14,8 +18,11 @@ from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import text as sql_text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.container import get_vector_store, get_pipeline, get_llm_router
+from app.core.database import get_db
 from app.core.event_bus import event_bus, STREAM_DOC_INGESTION, GROUP_DOC_WORKERS
 from config.settings import settings
 
@@ -38,34 +45,7 @@ class KnowledgeBaseCreate(BaseModel):
     description: Optional[str] = ""
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class RegisterRequest(BaseModel):
-    username: str
-    password: str
-    display_name: Optional[str] = ""
-    email: Optional[str] = ""
-
-
-# ==================== 认证 ====================
-
-
-@router.post("/auth/login")
-async def login(req: LoginRequest):
-    if req.username == "admin" and req.password == "admin123":
-        return {
-            "token": "dev-token",
-            "user": {"id": "1", "username": "admin", "role": "admin"},
-        }
-    raise HTTPException(401, "用户名或密码错误")
-
-
-@router.post("/auth/register")
-async def register(req: RegisterRequest):
-    return {"message": "注册成功", "user": {"id": str(uuid.uuid4()), "username": req.username}}
+# 注意: 认证模型 (LoginRequest/RegisterRequest) 在 Go 网关层处理
 
 
 # ==================== 知识库管理 ====================
@@ -275,33 +255,10 @@ async def reset_llm():
 
 # ==================== 用户 & 管理 ====================
 
+# 注意: 用户认证和用户管理 (登录/注册/用户列表/用户信息) 由 Go 网关直接处理，
+# RAG 服务只保留与知识库能力相关的管理端点。
 
-@router.get("/users/{user_id}")
-async def get_user(user_id: str):
-    return {"id": user_id, "username": "admin", "display_name": "系统管理员"}
-
-
-@router.get("/users/{user_id}/conversations")
-async def list_conversations(user_id: str):
+@router.get("/admin/audit-logs")
+async def get_audit_logs():
+    """管理员 - 审计日志"""
     return {"data": [], "total": 0}
-
-
-@router.get("/admin/stats")
-async def get_system_stats():
-    llm_router = get_llm_router()
-    health = await llm_router.check_health()
-    return {
-        "total_kbs": 1,
-        "total_documents": 0,
-        "total_chunks": 0,
-        "total_users": 1,
-        "pipeline_type": settings.PIPELINE_TYPE,
-        "llm": health,
-        "total_fallbacks": llm_router.total_fallbacks,
-        "is_fallback_mode": llm_router.is_fallback_mode,
-    }
-
-
-@router.get("/admin/users")
-async def list_users():
-    return {"data": [{"id": "1", "username": "admin", "role": "admin"}], "total": 1}

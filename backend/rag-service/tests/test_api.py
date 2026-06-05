@@ -3,6 +3,7 @@ API 路由集成测试
 
 测试覆盖:
   - 健康检查端点
+  - 认证（登录/注册）
   - 知识库 CRUD
   - 文档上传 (含参数校验)
   - 流式问答 SSE
@@ -11,7 +12,7 @@ API 路由集成测试
 
 测试策略:
   - 使用 FastAPI TestClient (httpx.AsyncClient)
-  - 所有底层服务 (Milvus/Redis/Embedding/Reranker/LLM) 通过 monkeypatch mock
+  - 所有底层服务 (Milvus/Redis/Embedding/Reranker/LLM/DB) 通过 monkeypatch mock
   - 不依赖任何外部服务
 """
 import json
@@ -279,13 +280,9 @@ class TestLLM:
 class TestAdmin:
 
     @pytest.mark.asyncio
-    async def test_admin_stats(self, client, mock_deps):
-        resp = await client.get("/api/v1/admin/stats")
+    async def test_admin_audit_logs(self, client):
+        """审计日志"""
+        resp = await client.get("/api/v1/admin/audit-logs")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total_kbs"] >= 0
-
-    @pytest.mark.asyncio
-    async def test_list_users(self, client):
-        resp = await client.get("/api/v1/admin/users")
-        assert resp.status_code == 200
+        assert "data" in data

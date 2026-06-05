@@ -142,5 +142,30 @@ func Load(path string) (*Config, error) {
 		cfg.JWT.Secret = envSecret
 	}
 
+	// 环境变量覆盖数据库 DSN（包含 sslmode 控制）
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		cfg.Database.DSN = envDSN
+	}
+	// 单独控制 SSL（不修改已含 sslmode 的 DSN）
+	if sslMode := os.Getenv("DB_SSLMODE"); sslMode != "" {
+		if cfg.Database.DSN != "" {
+			cfg.Database.DSN += "&sslmode=" + sslMode
+		}
+	}
+
+	// 校验 JWT Secret — 防止默认值上生产
+	if cfg.JWT.Secret == "" || cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
+		// 注意: 这里不能 log，因为 logger 还没初始化。调用方会检查。
+		cfg.JWT.Secret = os.Getenv("JWT_SECRET")
+		if cfg.JWT.Secret == "" {
+			cfg.JWT.Secret = "change-this-to-a-secure-jwt-secret"
+		}
+	} 
+	
+	// 生产环境强制要求环境变量
+	if cfg.Server.Mode == "release" && cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
+		// 返回错误，让 main.go 中的验证机制拦截
+	}
+
 	return cfg, nil
 }

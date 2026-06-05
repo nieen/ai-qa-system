@@ -150,6 +150,36 @@ CREATE INDEX idx_messages_created_at ON messages(created_at);
 CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+CREATE INDEX idx_audit_logs_action_time ON audit_logs(action, created_at);
+CREATE INDEX idx_conversations_updated_at ON conversations(updated_at);
+
+-- ============================================
+-- 用户同意记录 (合规)
+-- ============================================
+CREATE TABLE IF NOT EXISTS user_consents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    consent_type VARCHAR(50) NOT NULL DEFAULT 'privacy_policy',  -- privacy_policy, terms_of_service
+    consent_version VARCHAR(50) NOT NULL,
+    granted BOOLEAN NOT NULL DEFAULT TRUE,
+    ip_address VARCHAR(45),
+    granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX idx_user_consents_user ON user_consents(user_id);
+
+-- ============================================
+-- 用户删除请求 (7天冷静期)
+-- ============================================
+CREATE TABLE IF NOT EXISTS deletion_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
+    reason TEXT,
+    confirmed_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '7 days')
+);
+CREATE INDEX idx_deletion_requests_user ON deletion_requests(user_id);
 
 -- ============================================
 -- 默认管理员用户

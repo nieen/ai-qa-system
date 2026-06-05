@@ -21,6 +21,46 @@ const (
 	ContextKeyRequestID = "request_id"
 )
 
+// ==================== Token 黑名单（吊销）====================
+
+var (
+	tokenBlacklist   = make(map[string]time.Time)
+	tokenBlackMu     sync.RWMutex
+	blacklistCleanup time.Duration = 1 * time.Hour
+)
+
+// init 定期清理过期黑名单条目
+func init() {
+	go func() {
+		for {
+			time.Sleep(blacklistCleanup)
+			tokenBlackMu.Lock()
+			now := time.Now()
+			for token, expiresAt := range tokenBlacklist {
+				if now.After(expiresAt) {
+					delete(tokenBlacklist, token)
+				}
+			}
+			tokenBlackMu.Unlock()
+		}
+	}()
+}
+
+// RevokeToken 将令牌加入黑名单
+func RevokeToken(token string, expiresAt time.Time) {
+	tokenBlackMu.Lock()
+	defer tokenBlackMu.Unlock()
+	tokenBlacklist[token] = expiresAt
+}
+
+// isTokenRevoked 检查令牌是否已被吊销
+func isTokenRevoked(token string) bool {
+	tokenBlackMu.RLock()
+	defer tokenBlackMu.RUnlock()
+	_, exists := tokenBlacklist[token]
+	return exists
+}
+
 // RequestID 为每个请求注入唯一 ID
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -155,6 +195,16 @@ func Authenticate(secret string) gin.HandlerFunc {
 		// 去除 "Bearer " 前缀
 		if len(token) > 7 && token[:7] == "Bearer " {
 			token = token[7:]
+		}
+
+		// 检查 Token 是否已被吊销（登出）
+		if isTokenRevoked(token) {
+			c.JSON(401, gin.H{
+				"error": "令牌已失效，请重新登录",
+				"code":  "TOKEN_REVOKED",
+			})
+			c.Abort()
+			return
 		}
 
 		claims, err := ValidateJWT(token, secret)
