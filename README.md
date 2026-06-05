@@ -3,6 +3,7 @@
 基于 **DeepSeek + RAG** 的企业级智能问答平台，纯本地私有化部署，支持 PDF/Word/网页多源知识库。
 
 > 架构设计、技术选型、流程细节详见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+> 部署指南和用户手册详见 [docs/](./docs/) 目录。
 
 ## 架构概览
 
@@ -35,6 +36,8 @@
 | 存储 | PostgreSQL + Redis + MinIO |
 
 ## 快速开始
+
+> 完整部署说明详见 [部署手册](./docs/deployment-manual.md)。
 
 ### 前置条件
 - Docker & Docker Compose
@@ -81,12 +84,16 @@ npm install && npm run dev          # → localhost:3000
 
 | 路径 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/auth/login` | POST | 登录 |
-| `/api/v1/knowledge-bases` | GET/POST | 知识库 |
-| `/api/v1/knowledge-bases/:id/chat` | POST | 流式问答 (SSE) |
+| `/api/v1/auth/login` | POST | 登录 (admin / admin123) |
+| `/api/v1/knowledge-bases` | GET/POST | 知识库列表/创建 |
+| `/api/v1/knowledge-bases/:kbId/chat` | POST | 流式问答 (SSE) |
 | `/api/v1/knowledge-bases/:kbId/documents/upload` | POST | 上传文档 |
+| `/api/v1/knowledge-bases/:kbId/documents` | GET | 文档列表 |
+| `/api/v1/knowledge-bases/:kbId/documents/:docId/status` | GET | 文档索引状态 |
 | `/api/v1/admin/stats` | GET | 系统统计 |
 | `/health` | GET | 健康检查 |
+| `/health/llm` | GET | LLM 健康检查 |
+| `/health/downstream` | GET | 下游服务健康检查 |
 
 ## 默认访问
 - 前端: http://localhost:3000
@@ -99,7 +106,15 @@ ai-qa-system/
 ├── backend/
 │   ├── gateway/               # Go API 网关
 │   └── rag-service/           # Python RAG 服务
+│       ├── app/               # 应用代码
+│       ├── workers/           # 文档索引 Worker
+│       ├── tests/             # 测试套件 (75 测试)
+│       └── config/            # 配置管理
 ├── frontend/ai-qa-app/        # Next.js 前端
+├── docs/                      # 文档目录
+│   ├── index.md               # 文档索引
+│   ├── deployment-manual.md   # 部署手册
+│   └── user-manual.md         # 用户手册
 ├── ARCHITECTURE.md            # 详细架构文档
 └── README.md
 ```

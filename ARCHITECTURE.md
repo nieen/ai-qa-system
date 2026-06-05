@@ -12,7 +12,7 @@
   - [2.1 索引流程](#21-索引流程-ingestion-pipeline)
   - [2.2 分块策略](#22-分块策略-chunking-strategy)
   - [2.3 查询流程](#23-查询流程-query-pipeline)
-  - [2.4 检索召回：三路并行 + 精排](#24-检索召回三路并行--精排)
+  - [2.4 检索召回：两路并行 + RRF 融合 + 精排](#24-检索召回两路并行--rrf-融合--精排)
 - [3. 关键技术选型](#3-关键技术选型)
   - [3.1 向量数据库：Milvus](#31-向量数据库milvus-v254)
   - [3.2 嵌入模型：BGE-M3](#32-嵌入模型bge-m3)
@@ -230,7 +230,7 @@ def _fixed_size_chunks(self, text):
 └──────────────┘
 ```
 
-### 2.4 检索召回：两路并行 + RRF 融合 (解耦设计)
+### 2.4 检索召回：两路并行 + RRF 融合 + 精排 (解耦设计)
 
 **核心原则**: 向量检索和关键词检索是**两个独立的服务**，在 Pipeline 层用纯算法 (RRF) 融合结果。
 
@@ -330,19 +330,20 @@ VECTOR_STORE_TYPE=pgvector
 KEYWORD_STORE_TYPE=pgvector
 ```
 
-#### 三路检索的互补作用
+#### 两路检索的互补作用
 
 | 检索路 | 原理 | 擅长 | 盲区 |
 |--------|------|------|------|
 | **稠密向量** | BGE-M3 语义编码，余弦相似度 (IP) | "如何配置数据库" → 找到"修改 postgres dsn 参数" | 精确关键词、罕见词 |
 | **BM25 关键词** | 词频-逆文档频率 (Milvus 内置) | 搜"Milvus 端口 19530" 直接命中精确数字 | 同义词、语义泛化 |
-| **稀疏向量** | BGE-M3 lexical 编码 | 补充前两路漏掉的长尾关键词 | 单独使用效果不如前两路 |
 
-#### 为什么三路并行效果好于单路
+> 注意: BGE-M3 还支持 `encode_lexical` 生成稀疏向量，但当前 Pipeline 未启用该路。BM25 已在关键词检索层覆盖了稀疏检索的需求。`embed_sparse()` 方法保留作为未来"三路检索"扩展点。
+
+#### 为什么两路并行效果好于单路
 
 - 如果只用稠密向量：搜"端口号"找不到"19530"（数字不在语义空间里）
 - 如果只用 BM25：搜"计算机连不上"找不到"连接异常"（不同表述）
-- **三路互补 + RRF 融合 + Reranker 精排**，召回精度比纯向量检索高 **20-30%**
+- **两路互补 + RRF 融合 + Reranker 精排**，召回精度比纯向量检索高 **20-30%**
 
 #### 核心代码
 
@@ -676,7 +677,7 @@ VectorStore      ← MilvusStore、QdrantStore、PGVectorStore (纯向量)
 KeywordStore     ← MilvusBM25Store、PGFTSStore、SimpleBM25Store (纯关键词)
 EmbeddingModel   ← BGE-M3、OpenAIEmbedding、LocalEmbedding
 Reranker         ← BGE-Reranker、CohereReranker
-LLMProvider      ← VLLMProvider、DeepSeekAPIProvider、OpenAICompatibleProvider
+LLMProvider      ← OpenAICompatibleProvider (vLLM/DeepSeek/OpenAI/Ollama等)、AnthropicProvider
 QueryPipeline    ← NaiveRAGPipeline、AgenticRAGPipeline (Phase 2)
 ```
 
@@ -716,17 +717,29 @@ Container
 3. 配置生效
 ```
 
-### 9.3 LLM 多供应商路由与降级
+### 9.3 LLM 双协议路由与降级
 
 **代码位置**: `app/core/llm_router.py` + `app/llm/providers.py`
 
-#### 供应商支持
+#### 双协议支持
 
-| 供应商 | 类 | 适用场景 |
-|--------|----|---------|
-| vLLM 本地 | `VLLMProvider` | 内网部署，数据不外出 |
-| DeepSeek API | `DeepSeekAPIProvider` | 远程调用官方 API |
-| OpenAI 兼容 | `OpenAICompatibleProvider` | OpenAI / 其他兼容服务 |
+系统支持 **两种 API 协议**，通过 `LLM_API_FORMAT` 配置选择：
+
+| 协议 | 类 | 适用供应商 | API 端点 |
+|------|----|-----------|---------|
+| **OpenAI 兼容格式** | `OpenAICompatibleProvider` | vLLM(本地)、OpenAI、DeepSeek、Ollama、Groq 等 | `/v1/chat/completions` |
+| **Anthropic Messages 格式** | `AnthropicProvider` | Claude 系列 (Sonnet/Haiku/Opus) | `/v1/messages` |
+
+供应商通过 `LLM_PROVIDER` 配置,影响默认端点、API Key 策略和指标标签：
+
+| 供应商 | 默认端点 | 需 Key | 适用场景 |
+|--------|---------|--------|---------|
+| `vllm` | `http://localhost:8000/v1` | ❌ | 内网本地推理 |
+| `ollama` | `http://localhost:11434/v1` | ❌ | 本地 Ollama 部署 |
+| `deepseek` | `https://api.deepseek.com` | ✅ | DeepSeek 官方 API |
+| `openai` | `https://api.openai.com/v1` | ✅ | OpenAI GPT 系列 |
+| `anthropic` | `https://api.anthropic.com/v1` | ✅ | Anthropic Claude 系列 |
+| `groq` | `https://api.groq.com/openai/v1` | ✅ | Groq 快速推理 |
 
 #### 自动降级流程
 
@@ -767,14 +780,25 @@ LLM_MAX_RETRIES = 2         # 失败重试次数
 #### 配置示例
 
 ```bash
-# 主模型 = 本地 vLLM，备用 = DeepSeek API
-LLM_PRIMARY_PROVIDER=vllm
-LLM_VLLM_BASE=http://localhost:8000/v1
-LLM_VLLM_MODEL=deepseek-r1
+# 方案 A: 本地 vLLM + DeepSeek API 备用
+LLM_API_FORMAT=openai
+LLM_PROVIDER=vllm
+LLM_MODEL=deepseek-r1
+LLM_BASE_URL=http://localhost:8000/v1
 
 LLM_FALLBACK_ENABLED=true
+LLM_FALLBACK_API_FORMAT=openai
 LLM_FALLBACK_PROVIDER=deepseek
-LLM_DEEPSEEK_API_KEY=sk-xxxxx
+LLM_FALLBACK_MODEL=deepseek-chat
+LLM_FALLBACK_API_KEY=sk-xxxxx
+
+# 方案 B: Anthropic Claude (带思考模式)
+LLM_API_FORMAT=anthropic
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-20250514
+LLM_API_KEY=sk-ant-xxxxx
+LLM_THINKING_ENABLED=true
+LLM_THINKING_BUDGET=4096
 ```
 
 ### 9.4 Pipeline 编排器
@@ -850,8 +874,9 @@ result = await with_retry(
 
 ```bash
 # 用环境变量覆盖任何配置
-export LLM_PRIMARY_PROVIDER=deepseek
-export LLM_DEEPSEEK_API_KEY=sk-xxxx
+export LLM_API_FORMAT=openai
+export LLM_PROVIDER=deepseek
+export LLM_API_KEY=sk-xxxx
 export LLM_FALLBACK_ENABLED=false
 ```
 
