@@ -181,11 +181,11 @@ type ConversationMessage struct {
 }
 
 type UserDocument struct {
-	ID         string
-	Title      string
-	FileType   string
-	KbName     string
-	CreatedAt  time.Time
+	ID        string
+	Title     string
+	FileType  string
+	KbName    string
+	CreatedAt time.Time
 }
 
 func ExportUserData(userID string) (*UserExportData, error) {
@@ -426,15 +426,57 @@ func GetPendingDeletionRequests() ([]string, error) {
 	return userIDs, nil
 }
 
-// ==================== 管理员审计 ====================
+// ==================== 审计日志（统一入口）====================
 
-// AuditAdminAction 记录管理员操作到审计日志
-func AuditAdminAction(adminID, action, resourceType, resourceID string, details map[string]interface{}) error {
+// AuditLogEntry 写入审计日志（统一入口，带 IP 和 User-Agent）
+func AuditLogEntry(userID, action, resourceType, resourceID, ipAddress, userAgent string, details map[string]interface{}) error {
 	_, err := DB.Exec(`
-		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details, ip_address)
-		VALUES ($1, $2, $3, $4, $5, '')
-	`, adminID, action, resourceType, resourceID, details)
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, userID, action, resourceType, resourceID, details, ipAddress, userAgent)
 	return err
+}
+
+// AuditLogRow 审计日志行
+type AuditLogRow struct {
+	ID           string
+	UserID       string
+	Action       string
+	ResourceType string
+	ResourceID   string
+	Details      interface{}
+	IPAddress    string
+	UserAgent    string
+	CreatedAt    time.Time
+}
+
+// QueryAuditLogs 查询审计日志（分页）
+func QueryAuditLogs(limit, offset int) ([]AuditLogRow, int, error) {
+	var total int
+	DB.QueryRow(`SELECT COUNT(*) FROM audit_logs`).Scan(&total)
+
+	rows, err := DB.Query(`
+		SELECT id, user_id, action, resource_type, COALESCE(resource_id, ''),
+		       COALESCE(ip_address, ''), COALESCE(user_agent, ''), created_at
+		FROM audit_logs
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("查询审计日志失败: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []AuditLogRow
+	for rows.Next() {
+		var l AuditLogRow
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.ResourceType,
+			&l.ResourceID, &l.IPAddress, &l.UserAgent, &l.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("扫描审计日志行失败: %w", err)
+		}
+		logs = append(logs, l)
+	}
+	return logs, total, nil
 }
 
 // ==================== 系统统计 ====================

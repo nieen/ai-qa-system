@@ -188,3 +188,25 @@ CREATE INDEX idx_deletion_requests_user ON deletion_requests(user_id);
 INSERT INTO users (username, email, password_hash, display_name, role)
 VALUES ('admin', 'admin@company.com', crypt('admin123', gen_salt('bf')), '系统管理员', 'admin')
 ON CONFLICT (username) DO NOTHING;
+
+-- ============================================
+-- 审计日志删除保护
+-- ============================================
+-- 禁止直接在 audit_logs 表上执行 DELETE（只能通过清理函数）
+CREATE OR REPLACE FUNCTION fn_protect_audit_logs()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION '不允许直接删除审计日志，请使用 AuditLogCleanup 函数（保留 180 天）';
+END;
+$$ LANGUAGE plpgsql;
+
+-- 如果触发器已存在则跳过
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_protect_audit_logs') THEN
+        CREATE TRIGGER trg_protect_audit_logs
+            BEFORE DELETE ON audit_logs
+            FOR EACH ROW EXECUTE FUNCTION fn_protect_audit_logs();
+    END IF;
+END;
+$$;

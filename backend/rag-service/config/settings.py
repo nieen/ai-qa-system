@@ -99,8 +99,8 @@ class Settings(BaseSettings):
     # ============ 检索参数 ============
 
     # --- Embedding ---
-    EMBEDDING_MODEL: str = "BAAI/bge-m3"
-    EMBEDDING_DIM: int = 1024
+    EMBEDDING_MODEL: str = "shibing624/text2vec-base-chinese"
+    EMBEDDING_DIM: int = 768
     EMBEDDING_DEVICE: str = "cuda"
     EMBEDDING_BATCH_SIZE: int = 32
     EMBEDDING_MAX_LENGTH: int = 512

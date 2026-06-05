@@ -107,6 +107,18 @@ func (cb *CircuitBreaker) IsOpen() bool {
 	return cb.state == stateOpen
 }
 
+// RemoteState 读取内部状态（供分布式熔断器使用）
+func (cb *CircuitBreaker) RemoteState() (state int, failures int) {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return int(cb.state), cb.consecutiveFailures
+}
+
+// RemoteRecoveryTimeout 读取恢复超时（供分布式熔断器使用）
+func (cb *CircuitBreaker) RemoteRecoveryTimeout() time.Duration {
+	return cb.recoveryTimeout
+}
+
 // Reset 手动重置熔断器
 func (cb *CircuitBreaker) Reset() {
 	cb.mu.Lock()
@@ -114,6 +126,16 @@ func (cb *CircuitBreaker) Reset() {
 	cb.state = stateClosed
 	cb.consecutiveFailures = 0
 	cb.halfOpenCount = 0
+}
+
+// ForceOpen 强制将熔断器置为 OPEN 状态（用于分布式同步）
+func (cb *CircuitBreaker) ForceOpen() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if cb.state != stateOpen {
+		cb.state = stateOpen
+		cb.lastFailureTime = time.Now()
+	}
 }
 
 // CircuitBreakerGroup 熔断器组 (每个服务一个)

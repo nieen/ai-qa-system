@@ -31,11 +31,11 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		// 用户管理
 		protected.GET("/user/profile", h.GetProfile)
 		protected.PUT("/user/profile", h.UpdateProfile)
-		protected.POST("/user/logout", h.Logout)               // 登出 (Token 吊销)
+		protected.POST("/user/logout", h.Logout) // 登出 (Token 吊销)
 
 		// 数据合规 (PIPL)
-		protected.GET("/user/export", h.ExportData)               // 数据可携带权
-		protected.POST("/user/delete-request", h.RequestDeletion) // 删除权申请
+		protected.GET("/user/export", h.ExportData)                                  // 数据可携带权
+		protected.POST("/user/delete-request", h.RequestDeletion)                    // 删除权申请
 		protected.POST("/user/delete-request/:requestId/confirm", h.ConfirmDeletion) // 确认删除
 		protected.POST("/user/delete-request/:requestId/cancel", h.CancelDeletion)   // 取消删除
 
@@ -66,7 +66,7 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		protected.GET("/admin/users", admin, h.ListUsers)
 		protected.PUT("/admin/users/:userId", admin, h.UpdateUserRole)
 		protected.GET("/admin/audit-logs", admin, h.GetAuditLogs)
-		protected.POST("/admin/cleanup", admin, h.AdminCleanup)   // 数据保留策略清理
+		protected.POST("/admin/cleanup", admin, h.AdminCleanup) // 数据保留策略清理
 	}
 
 	// ---- RAG 服务内部路由 (服务间调用，使用内部认证) ----

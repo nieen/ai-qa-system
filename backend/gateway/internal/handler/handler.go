@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -34,7 +35,7 @@ type Handler struct {
 	cfg          *config.Config
 	logger       *zap.SugaredLogger
 	client       *http.Client
-	breakerGroup *CircuitBreakerGroup
+	breakerGroup *DistributedCircuitBreakerGroup
 }
 
 // NewHandler 创建新的处理器
@@ -50,7 +51,7 @@ func NewHandler(cfg *config.Config, logger *zap.SugaredLogger) *Handler {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		breakerGroup: NewCircuitBreakerGroup(),
+		breakerGroup: NewDistributedCircuitBreakerGroup(),
 	}
 }
 
@@ -76,16 +77,25 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	if user == nil {
+		// 审计：登录失败 - 用户不存在
+		_ = database.AuditLogEntry("", "user.login_failed", "session", req.Username,
+			c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{"reason": "user_not_found"})
 		c.JSON(401, gin.H{"error": "用户名或密码错误", "code": "AUTH_FAILED"})
 		return
 	}
 	if !user.IsActive {
+		// 审计：登录失败 - 账户禁用
+		_ = database.AuditLogEntry("", "user.login_failed", "session", user.ID,
+			c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{"reason": "account_disabled"})
 		c.JSON(403, gin.H{"error": "账户已被禁用", "code": "ACCOUNT_DISABLED"})
 		return
 	}
 
 	// bcrypt 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		// 审计：登录失败 - 密码错误
+		_ = database.AuditLogEntry("", "user.login_failed", "session", user.ID,
+			c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{"reason": "wrong_password"})
 		c.JSON(401, gin.H{"error": "用户名或密码错误", "code": "AUTH_FAILED"})
 		return
 	}
@@ -100,6 +110,10 @@ func (h *Handler) Login(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "令牌签发失败", "code": "TOKEN_ERROR"})
 		return
 	}
+
+	// 审计：登录成功
+	_ = database.AuditLogEntry(user.ID, "user.login", "session", "",
+		c.ClientIP(), c.Request.UserAgent(), nil)
 
 	h.logger.Infow("用户登录成功",
 		"user_id", user.ID,
@@ -173,6 +187,10 @@ func (h *Handler) Register(c *gin.Context) {
 	clientIP := c.ClientIP()
 	_ = database.RecordConsent(userID, "privacy_policy", "v1", clientIP)
 
+	// 审计：用户注册
+	_ = database.AuditLogEntry(userID, "user.register", "user", userID,
+		clientIP, c.Request.UserAgent(), nil)
+
 	h.logger.Infow("用户注册成功",
 		"user_id", userID,
 		"username", req.Username,
@@ -232,7 +250,13 @@ func (h *Handler) ExportData(c *gin.Context) {
 		return
 	}
 
-	// 记录审计
+	// 记录审计：数据导出 (PIPL 第45条)
+	_ = database.AuditLogEntry(userID, "user.export_data", "user", userID,
+		c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{
+			"conversations": len(data.Conversations),
+			"documents":     len(data.Documents),
+		})
+
 	h.logger.Infow("用户数据导出", "user_id", userID)
 
 	c.JSON(200, data)
@@ -257,6 +281,11 @@ func (h *Handler) Logout(c *gin.Context) {
 		"user_id", c.GetString(ctxKeyUserID),
 	)
 
+	// 审计：用户登出
+	userID := c.GetString(ctxKeyUserID)
+	_ = database.AuditLogEntry(userID, "user.logout", "session", "",
+		c.ClientIP(), c.Request.UserAgent(), nil)
+
 	c.JSON(200, gin.H{"message": "登出成功"})
 }
 
@@ -272,6 +301,10 @@ func (h *Handler) RequestDeletion(c *gin.Context) {
 	}
 
 	h.logger.Infow("用户请求删除账号", "user_id", userID, "request_id", requestID)
+
+	// 审计：删除请求 (PIPL 第47条)
+	_ = database.AuditLogEntry(userID, "user.request_deletion", "deletion_request", requestID,
+		c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{"expires_in": "7d"})
 
 	c.JSON(200, gin.H{
 		"message":    "删除请求已创建，请在7天内确认，逾期自动取消",
@@ -293,6 +326,10 @@ func (h *Handler) ConfirmDeletion(c *gin.Context) {
 
 	h.logger.Infow("用户账号已删除", "user_id", userID)
 
+	// 审计：确认删除
+	_ = database.AuditLogEntry(userID, "user.confirm_deletion", "user", userID,
+		c.ClientIP(), c.Request.UserAgent(), nil)
+
 	c.JSON(200, gin.H{
 		"message": "账号已删除，所有关联数据已清除",
 	})
@@ -308,6 +345,10 @@ func (h *Handler) CancelDeletion(c *gin.Context) {
 		return
 	}
 
+	// 审计：取消删除
+	_ = database.AuditLogEntry(userID, "user.cancel_deletion", "deletion_request", requestID,
+		c.ClientIP(), c.Request.UserAgent(), nil)
+
 	c.JSON(200, gin.H{"message": "删除请求已取消"})
 }
 
@@ -321,7 +362,8 @@ func (h *Handler) AdminCleanup(c *gin.Context) {
 	convDeleted, _ := database.CleanupOldConversations(convDays)
 	logDeleted, _ := database.CleanupOldAuditLogs(logDays)
 
-	_ = database.AuditAdminAction(adminID, "admin.cleanup", "system", "",
+	_ = database.AuditLogEntry(adminID, "admin.cleanup", "system", "",
+		c.ClientIP(), c.Request.UserAgent(),
 		map[string]interface{}{
 			"conversations_deleted": convDeleted,
 			"audit_logs_deleted":    logDeleted,
@@ -493,7 +535,8 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	}
 
 	// 审计：管理员访问用户列表
-	_ = database.AuditAdminAction(adminID, "admin.list_users", "user", "", nil)
+	_ = database.AuditLogEntry(adminID, "admin.list_users", "user", "",
+		c.ClientIP(), c.Request.UserAgent(), nil)
 
 	result := make([]gin.H, 0, len(users))
 	for _, u := range users {
@@ -529,14 +572,45 @@ func (h *Handler) UpdateUserRole(c *gin.Context) {
 	)
 
 	// 预留：更新角色逻辑
-	_ = database.AuditAdminAction(adminID, "admin.update_role", "user", userID,
-		map[string]interface{}{"new_role": req.Role})
+	_ = database.AuditLogEntry(adminID, "admin.update_role", "user", userID,
+		c.ClientIP(), c.Request.UserAgent(), map[string]interface{}{"new_role": req.Role})
 
 	c.JSON(200, gin.H{"message": "角色更新成功"})
 }
 
 func (h *Handler) GetAuditLogs(c *gin.Context) {
-	h.proxyToRAGService(c, "GET", "/admin/audit-logs", nil)
+	adminID := c.GetString(ctxKeyUserID)
+
+	// 分页参数
+	limit := 50
+	offset := 0
+
+	logs, total, err := database.QueryAuditLogs(limit, offset)
+	if err != nil {
+		h.logger.Errorw("查询审计日志失败", "error", err)
+		c.JSON(503, gin.H{"error": "查询审计日志失败", "code": "SERVICE_UNAVAILABLE"})
+		return
+	}
+
+	// 审计：管理员查看审计日志（循环审计）
+	_ = database.AuditLogEntry(adminID, "admin.view_audit_logs", "audit_log", "",
+		c.ClientIP(), c.Request.UserAgent(), nil)
+
+	result := make([]gin.H, 0, len(logs))
+	for _, l := range logs {
+		result = append(result, gin.H{
+			"id":            l.ID,
+			"user_id":       l.UserID,
+			"action":        l.Action,
+			"resource_type": l.ResourceType,
+			"resource_id":   l.ResourceID,
+			"ip_address":    l.IPAddress,
+			"user_agent":    l.UserAgent,
+			"created_at":    l.CreatedAt,
+		})
+	}
+
+	c.JSON(200, gin.H{"data": result, "total": total})
 }
 
 func (h *Handler) InternalHealth(c *gin.Context) {
@@ -668,6 +742,15 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), bodyBytes)
+
+	// 审计：对写操作统一记录审计日志（KB/文档 CRUD）
+	if method == "POST" || method == "PUT" || method == "DELETE" {
+		auditAction := extractAuditAction(method, path)
+		resourceType := extractAuditResource(path)
+		resourceID := extractAuditResourceID(path)
+		_ = database.AuditLogEntry(c.GetString(ctxKeyUserID), auditAction,
+			resourceType, resourceID, c.ClientIP(), c.Request.UserAgent(), nil)
+	}
 }
 
 // proxyToRAGServiceStream 流式代理到 RAG 服务 (SSE)
@@ -753,10 +836,12 @@ func (h *Handler) proxyToRAGServiceStream(c *gin.Context, method, path string, b
 }
 
 // getCircuitBreaker 获取或创建熔断器
-func (h *Handler) getCircuitBreaker() *CircuitBreaker {
+func (h *Handler) getCircuitBreaker() *DistributedCircuitBreaker {
 	cbCfg := h.cfg.Services.RAGService.CircuitBreaker
 	if !cbCfg.Enabled {
-		return &CircuitBreaker{state: stateClosed}
+		// 熔断器禁用 → 返回一个永不过期的无操作分布式熔断器
+		noopLocal := NewCircuitBreaker(9999, 24*time.Hour, 9999)
+		return NewDistributedCircuitBreaker("rag-service", noopLocal)
 	}
 
 	timeout, err := time.ParseDuration(cbCfg.RecoveryTimeout)
@@ -770,4 +855,56 @@ func (h *Handler) getCircuitBreaker() *CircuitBreaker {
 		timeout,
 		cbCfg.HalfOpenMax,
 	)
+}
+
+// ==================== 审计辅助函数 ====================
+
+// extractAuditAction 从 HTTP 方法和路径提取审计动作
+func extractAuditAction(method, path string) string {
+	action := "kb."
+	switch method {
+	case "POST":
+		action += "create"
+	case "PUT":
+		action += "update"
+	case "DELETE":
+		action += "delete"
+	default:
+		action += strings.ToLower(method)
+	}
+
+	if strings.Contains(path, "/documents/") {
+		action = strings.Replace(action, "kb.", "document.", 1)
+	}
+	if strings.Contains(path, "/chat") {
+		action = "kb.chat"
+	}
+	return action
+}
+
+// extractAuditResource 从路径提取资源类型
+func extractAuditResource(path string) string {
+	switch {
+	case strings.Contains(path, "/knowledge-bases") && !strings.Contains(path, "/documents"):
+		return "knowledge_base"
+	case strings.Contains(path, "/documents"):
+		return "document"
+	case strings.Contains(path, "/conversations"):
+		return "conversation"
+	default:
+		return "kb"
+	}
+}
+
+// extractAuditResourceID 从路径中提取资源 ID
+func extractAuditResourceID(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// 路径格式: knowledge-bases/{kbId}/documents/{docId}
+	// 或: knowledge-bases/{kbId}
+	for i, p := range parts {
+		if (p == "knowledge-bases" || p == "conversations") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
 }

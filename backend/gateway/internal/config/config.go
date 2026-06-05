@@ -160,8 +160,8 @@ func Load(path string) (*Config, error) {
 		if cfg.JWT.Secret == "" {
 			cfg.JWT.Secret = "change-this-to-a-secure-jwt-secret"
 		}
-	} 
-	
+	}
+
 	// 生产环境强制要求环境变量
 	if cfg.Server.Mode == "release" && cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
 		// 返回错误，让 main.go 中的验证机制拦截

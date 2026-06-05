@@ -23,6 +23,12 @@ func main() {
 	logger := mustInitLogger(cfg.Log)
 	defer logger.Sync()
 
+	// 设置 middleware 包的日志记录器
+	middleware.SetLogger(logger)
+
+	// 初始化 Redis（用于分布式限流、Token 黑名单、熔断器）
+	initRedis(cfg, logger)
+
 	initDatabase(cfg, logger)
 	r := setupRouter(cfg, logger)
 	srv := createServer(cfg, r)
@@ -96,6 +102,52 @@ func initDatabase(cfg *config.Config, logger *zap.SugaredLogger) {
 		return
 	}
 	logger.Infow("数据库连接成功", "dsn", cfg.Database.DSN)
+
+	// 启动审计日志自动清理 (每24小时清理一次, 保留180天)
+	go startAuditLogCleanup(logger)
+}
+
+// initRedis 初始化 Redis 连接池（分布式状态共享）
+func initRedis(cfg *config.Config, logger *zap.SugaredLogger) {
+	if err := middleware.InitRedis(cfg.Redis); err != nil {
+		logger.Warnw("Redis 连接失败，分布式功能将降级到本地模式", "error", err)
+		logger.Warnw("  - Token 吊销: 仅当前副本生效（多副本部署时建议修复）")
+		logger.Warnw("  - 分布式限流: 降级到本地内存限流")
+		logger.Warnw("  - 分布式熔断: 降级到本地熔断器")
+		return
+	}
+	logger.Infow("Redis 连接成功",
+		"addr", cfg.Redis.Addr,
+		"db", cfg.Redis.DB,
+	)
+}
+
+// startAuditLogCleanup 定时清理过期审计日志和对话
+func startAuditLogCleanup(logger *zap.SugaredLogger) {
+	const (
+		auditLogRetentionDays = 180
+		convRetentionDays     = 90
+		cleanupInterval       = 24 * time.Hour
+	)
+
+	for {
+		next := time.Now().Truncate(cleanupInterval).Add(cleanupInterval)
+		time.Sleep(time.Until(next))
+
+		convDeleted, err := database.CleanupOldConversations(convRetentionDays)
+		if err != nil {
+			logger.Warnw("自动清理对话失败", "error", err)
+		} else if convDeleted > 0 {
+			logger.Infow("自动清理过期对话", "deleted", convDeleted, "retention_days", convRetentionDays)
+		}
+
+		logDeleted, err := database.CleanupOldAuditLogs(auditLogRetentionDays)
+		if err != nil {
+			logger.Warnw("自动清理审计日志失败", "error", err)
+		} else if logDeleted > 0 {
+			logger.Infow("自动清理过期审计日志", "deleted", logDeleted, "retention_days", auditLogRetentionDays)
+		}
+	}
 }
 
 // setupRouter 初始化 Gin 引擎、中间件链和全部路由
