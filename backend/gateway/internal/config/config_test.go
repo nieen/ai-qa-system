@@ -11,7 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	// 创建最小配置
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	content := []byte("server:\n  name: test\n")
+	content := []byte("server:\n  name: test\njwt:\n  secret: test-secret\n")
 	if err := os.WriteFile(cfgPath, content, 0644); err != nil {
 		t.Fatal(err)
 	}

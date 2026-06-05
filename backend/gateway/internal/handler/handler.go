@@ -731,10 +731,10 @@ func (h *Handler) buildRAGURL(path string) string {
 	return h.cfg.Services.RAGService.BaseURL + "/api/v1" + path
 }
 
-// proxyToRAGService 将请求代理到 RAG 服务 (带熔断和重试)
-func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body interface{}) {
-	ragURL := h.buildRAGURL(path)
+// ==================== 共享代理辅助方法 ====================
 
+// isCircuitOpen 检查熔断器是否已打开；如果已熔断，自动写入 503 响应并返回 true
+func (h *Handler) isCircuitOpen(c *gin.Context, path, method string) bool {
 	cb := h.getCircuitBreaker()
 	if !cb.Allow() {
 		h.logger.Warnw("熔断器阻止请求", "path", path, "method", method)
@@ -742,22 +742,49 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 			"error": "服务暂不可用 (熔断)",
 			"code":  "CIRCUIT_OPEN",
 		})
+		return true
+	}
+	return false
+}
+
+// setRAGHeaders 设置代理到 RAG 服务的通用请求头
+func setRAGHeaders(req *http.Request, c *gin.Context) {
+	req.Header.Set("X-User-ID", c.GetString(ctxKeyUserID))
+	req.Header.Set("X-User-Role", c.GetString(ctxKeyUserRole))
+	req.Header.Set("X-Request-ID", c.GetString(ctxKeyRequestID))
+	req.Header.Set("Content-Type", "application/json")
+}
+
+// proxyToRAGService 将请求代理到 RAG 服务 (带熔断和重试)
+func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body interface{}) {
+	ragURL := h.buildRAGURL(path)
+
+	if h.isCircuitOpen(c, path, method) {
 		return
 	}
 
-	var reqBody io.Reader
+	// 预序列化 body（避免每次重试重复序列化同一个对象）
+	var jsonBody []byte
 	if body != nil {
-		jsonData, err := json.Marshal(body)
+		var err error
+		jsonBody, err = json.Marshal(body)
 		if err != nil {
 			h.logger.Errorf("JSON 序列化失败: %v", err)
 			c.JSON(500, gin.H{"error": "内部错误", "code": "INTERNAL_ERROR"})
 			return
 		}
-		reqBody = bytes.NewReader(jsonData)
 	}
 
+	// body == nil 但 POST/PUT 也需要转发请求体（如文档上传）
+	var rawBody []byte
 	if body == nil && (method == "POST" || method == "PUT") {
-		reqBody = c.Request.Body
+		var err error
+		rawBody, err = io.ReadAll(c.Request.Body)
+		if err != nil {
+			h.logger.Errorf("读取请求体失败: %v", err)
+			c.JSON(500, gin.H{"error": "内部错误", "code": "INTERNAL_ERROR"})
+			return
+		}
 	}
 
 	maxRetries := h.cfg.Services.RAGService.RetryCount
@@ -765,6 +792,14 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 	var resp *http.Response
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// 每次循环重新构造 reader，避免第一次请求后 body 被消耗
+		var reqBody io.Reader
+		if jsonBody != nil {
+			reqBody = bytes.NewReader(jsonBody)
+		} else if rawBody != nil {
+			reqBody = bytes.NewReader(rawBody)
+		}
+
 		ctx := c.Request.Context()
 		req, err := http.NewRequestWithContext(ctx, method, ragURL, reqBody)
 		if err != nil {
@@ -772,10 +807,7 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 			return
 		}
 
-		req.Header.Set("X-User-ID", c.GetString(ctxKeyUserID))
-		req.Header.Set("X-User-Role", c.GetString(ctxKeyUserRole))
-		req.Header.Set("X-Request-ID", c.GetString(ctxKeyRequestID))
-		req.Header.Set("Content-Type", "application/json")
+		setRAGHeaders(req, c)
 
 		resp, lastErr = h.client.Do(req)
 		if lastErr == nil {
@@ -801,16 +833,16 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 
 	if lastErr != nil {
 		h.logger.Errorf("RAG 服务请求失败 (已重试 %d 次): %v", maxRetries, lastErr)
-		cb.Failure()
+		h.getCircuitBreaker().Failure()
 		c.JSON(502, gin.H{"error": "服务暂不可用", "code": "SERVICE_UNAVAILABLE"})
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 500 {
-		cb.Failure()
+		h.getCircuitBreaker().Failure()
 	} else {
-		cb.Success()
+		h.getCircuitBreaker().Success()
 	}
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
@@ -820,7 +852,7 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 	if method == "POST" || method == "PUT" || method == "DELETE" {
 		auditAction := extractAuditAction(method, path)
 		resourceType := extractAuditResource(path)
-		resourceID := extractAuditResourceID(path)
+		resourceID := extractAuditResourceID(c)
 		_ = database.AuditLogEntry(c.GetString(ctxKeyUserID), auditAction,
 			resourceType, resourceID, c.ClientIP(), c.Request.UserAgent(), nil)
 	}
@@ -830,12 +862,7 @@ func (h *Handler) proxyToRAGService(c *gin.Context, method, path string, body in
 func (h *Handler) proxyToRAGServiceStream(c *gin.Context, method, path string, body interface{}) {
 	ragURL := h.buildRAGURL(path)
 
-	cb := h.getCircuitBreaker()
-	if !cb.Allow() {
-		c.JSON(503, gin.H{
-			"error": "服务暂不可用 (熔断)",
-			"code":  "CIRCUIT_OPEN",
-		})
+	if h.isCircuitOpen(c, path, method) {
 		return
 	}
 
@@ -852,18 +879,16 @@ func (h *Handler) proxyToRAGServiceStream(c *gin.Context, method, path string, b
 		return
 	}
 
-	req.Header.Set("X-User-ID", c.GetString(ctxKeyUserID))
-	req.Header.Set("X-Request-ID", c.GetString(ctxKeyRequestID))
-	req.Header.Set("Content-Type", "application/json")
+	setRAGHeaders(req, c)
 
-	resp, err := h.client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			h.logger.Infow("SSE 流中断: 客户端断开", "path", path)
-			return
-		}
-		h.logger.Errorf("SSE 代理请求失败: %v", err)
-		cb.Failure()
+		resp, err := h.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.Infow("SSE 流中断: 客户端断开", "path", path)
+				return
+			}
+			h.logger.Errorf("SSE 代理请求失败: %v", err)
+			h.getCircuitBreaker().Failure()
 		select {
 		case <-ctx.Done():
 			return
@@ -874,7 +899,7 @@ func (h *Handler) proxyToRAGServiceStream(c *gin.Context, method, path string, b
 	}
 	defer resp.Body.Close()
 
-	cb.Success()
+	h.getCircuitBreaker().Success()
 
 	c.Status(resp.StatusCode)
 	for k, v := range resp.Header {
@@ -969,14 +994,14 @@ func extractAuditResource(path string) string {
 	}
 }
 
-// extractAuditResourceID 从路径中提取资源 ID
-func extractAuditResourceID(path string) string {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	// 路径格式: knowledge-bases/{kbId}/documents/{docId}
-	// 或: knowledge-bases/{kbId}
-	for i, p := range parts {
-		if (p == "knowledge-bases" || p == "conversations") && i+1 < len(parts) {
-			return parts[i+1]
+// extractAuditResourceID 从 Gin 路由参数中提取资源 ID
+func extractAuditResourceID(c *gin.Context) string {
+	for _, param := range c.Params {
+		switch param.Key {
+		case "id", "kbId", "docId", "convId":
+			if param.Value != "" {
+				return param.Value
+			}
 		}
 	}
 	return ""

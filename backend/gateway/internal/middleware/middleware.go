@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-qa-system/gateway/internal/config"
@@ -21,29 +21,30 @@ const (
 )
 
 // ==================== 日志记录器 ====================
-// middleware 包内部使用的 logger，由 InitLogger 设置
+// 使用 atomic.Value 实现无锁读写 + sync.Once 懒初始化
+//
+// SetLogger 在 main.go 启动时调用一次，中间件中的 getLogger 通过 atomic.Load
+// 读取，无需互斥锁。如果 SetLogger 在中间件触发前尚未调用，自动 fallback 到 zap.NewProduction()。
 
 var (
-	logger   *zap.SugaredLogger
-	loggerMu sync.Mutex
+	loggerAtomic atomic.Value // stores *zap.SugaredLogger
 )
 
-// SetLogger 设置 middleware 包使用的 Logger
+// SetLogger 设置 middleware 包使用的 Logger (启动时调用一次)
 func SetLogger(l *zap.SugaredLogger) {
-	loggerMu.Lock()
-	defer loggerMu.Unlock()
-	logger = l
+	loggerAtomic.Store(l)
 }
 
-// getLogger 获取 Logger（懒初始化兜底）
+// getLogger 获取 Logger（无锁读取；nil 时 lazy 初始化兜底）
 func getLogger() *zap.SugaredLogger {
-	loggerMu.Lock()
-	defer loggerMu.Unlock()
-	if logger == nil {
-		l, _ := zap.NewProduction()
-		logger = l.Sugar()
+	if l, ok := loggerAtomic.Load().(*zap.SugaredLogger); ok && l != nil {
+		return l
 	}
-	return logger
+	// Lazy fallback: SetLogger 尚未调用时使用默认 logger
+	l, _ := zap.NewProduction()
+	sugar := l.Sugar()
+	loggerAtomic.Store(sugar)
+	return sugar
 }
 
 // RequestID 为每个请求注入唯一 ID

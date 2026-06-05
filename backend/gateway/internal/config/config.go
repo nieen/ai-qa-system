@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -146,10 +148,17 @@ func Load(path string) (*Config, error) {
 	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
 		cfg.Database.DSN = envDSN
 	}
-	// 单独控制 SSL（不修改已含 sslmode 的 DSN）
+	// 单独控制 SSL（使用 url.Values 正确拼接参数，避免 ?/& 混淆）
 	if sslMode := os.Getenv("DB_SSLMODE"); sslMode != "" {
 		if cfg.Database.DSN != "" {
-			cfg.Database.DSN += "&sslmode=" + sslMode
+			parsed, err := url.Parse(cfg.Database.DSN)
+			if err == nil {
+				q := parsed.Query()
+				q.Set("sslmode", sslMode)
+				parsed.RawQuery = q.Encode()
+				cfg.Database.DSN = parsed.String()
+			}
+			// 解析失败时不修改 DSN（保持原样，让 database/sql 后续报错）
 		}
 	}
 
@@ -164,7 +173,7 @@ func Load(path string) (*Config, error) {
 
 	// 生产环境强制要求环境变量
 	if cfg.Server.Mode == "release" && cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
-		// 返回错误，让 main.go 中的验证机制拦截
+		return nil, fmt.Errorf("production mode requires JWT_SECRET environment variable to be set to a secure random string")
 	}
 
 	return cfg, nil

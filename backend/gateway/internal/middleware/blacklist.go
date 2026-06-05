@@ -37,6 +37,7 @@ func RevokeToken(token string, expiresAt time.Time) {
 	_, err := conn.Do("SET", key, "1", "EX", int(ttl.Seconds()))
 	if err != nil {
 		// 降级：只记录日志，不影响主流程
+		logger := getLogger()
 		logger.Warn(fmt.Sprintf("Token 黑名单写入失败: %v", err))
 	}
 }

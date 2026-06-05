@@ -35,6 +35,7 @@ const (
 // ARGV[2] = 当前副本的失败计数 (int)
 // ARGV[3] = 当前副本的时间戳 (unix nano)
 // ARGV[4] = TTL (seconds)
+// ARGV[5] = 当前时间戳 (unix nano, 由应用层传入，避免 Lua 内调用阻塞的 TIME 命令)
 //
 // 返回值:
 //
@@ -51,13 +52,13 @@ local local_state = tonumber(ARGV[1])
 local local_failures = tonumber(ARGV[2])
 local local_ts = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local now = tonumber(ARGV[5])
 
 -- 读取 Redis 当前状态
 local redis_state_raw = redis.call("HMGET", key, "state", "failures", "timestamp")
 local redis_state = tonumber(redis_state_raw[1])
 local redis_failures = tonumber(redis_state_raw[2]) or 0
 local redis_ts = tonumber(redis_state_raw[3]) or 0
-local now = tonumber(redis.call("TIME")[1]) * 1000000000
 
 if redis_state == nil then
     -- Key 不存在 → 写入当前副本状态
@@ -113,7 +114,7 @@ func SyncCircuitBreaker(name string, localState int, localFailures int, recovery
 	}
 
 	values, err := redis.Ints(cbSyncScript.Do(conn, key,
-		localState, localFailures, time.Now().UnixNano(), ttl))
+		localState, localFailures, time.Now().UnixNano(), ttl, time.Now().UnixNano()))
 	if err != nil || len(values) < 2 {
 		return localState, localFailures
 	}
