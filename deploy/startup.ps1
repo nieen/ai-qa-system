@@ -57,8 +57,25 @@ if (-not $ragRunning) {
     Write-Host "    RAG 服务已在运行" -ForegroundColor Yellow
 }
 
+# 步骤 2b: 启动文档索引 Worker
+Write-Host "`n[2b/5] 启动文档索引 Worker..." -ForegroundColor Blue
+Set-Location "$ProjectRoot\backend\rag-service"
+
+$workerRunning = Get-Process -Name "python" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "document_worker" }
+if (-not $workerRunning) {
+    $workerJob = Start-Job -ScriptBlock {
+        param($p, $r)
+        Set-Location $r
+        & $p -m workers.document_worker
+    } -ArgumentList $python, $ProjectRoot
+    Write-Host "    文档索引 Worker 已启动" -ForegroundColor Green
+    Start-Sleep -Seconds 1
+} else {
+    Write-Host "    Worker 已在运行" -ForegroundColor Yellow
+}
+
 # 步骤 3: 启动 Go 网关
-Write-Host "`n[3/4] 启动 Go API 网关..." -ForegroundColor Blue
+Write-Host "`n[3/5] 启动 Go API 网关..." -ForegroundColor Blue
 Set-Location "$ProjectRoot\backend\gateway"
 
 if (-not (Test-Path "go.sum")) {
@@ -80,7 +97,7 @@ if (-not $gwRunning) {
 }
 
 # 步骤 4: 启动前端
-Write-Host "`n[4/4] 启动前端界面..." -ForegroundColor Blue
+Write-Host "`n[4/5] 启动前端界面..." -ForegroundColor Blue
 Set-Location "$ProjectRoot\frontend\ai-qa-app"
 
 if (-not (Test-Path "node_modules")) {

@@ -1,6 +1,11 @@
 """
 依赖注入容器
 组装所有服务实例，管理生命周期
+
+多副本部署安全:
+  - 每个进程创建独立的 Container 实例
+  - 所有服务使用实例变量而非类变量
+  - Container 实例由 lifespan 管理，不在模块层面创建
 """
 import logging
 from typing import Optional
@@ -11,43 +16,76 @@ from app.core.protocols import (
 )
 from app.core.llm_router import LLMRouter
 from app.core.cache import conversation_cache
+from app.core.event_bus import event_bus
 from app.core.pipeline import NaiveRAGPipeline
 from app.retrieval.milvus_client import MilvusClient, MilvusKeywordStore
 from app.core.embeddings import EmbeddingManager
 from app.retrieval.reranker import RerankerService
-from app.llm.providers import VLLMProvider, DeepSeekAPIProvider, OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider, AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
+# ============ 供应商默认端点 ============
+
+PROVIDER_DEFAULTS: dict = {
+    "openai":    {"base_url": "https://api.openai.com/v1",       "needs_key": True},
+    "deepseek":  {"base_url": "https://api.deepseek.com",         "needs_key": True},
+    "vllm":      {"base_url": "http://localhost:8000/v1",         "needs_key": False},
+    "ollama":    {"base_url": "http://localhost:11434/v1",        "needs_key": False},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1",     "needs_key": True},
+    "groq":      {"base_url": "https://api.groq.com/openai/v1",  "needs_key": True},
+}
+
+
+def _resolve_llm_config(
+    api_format: str,
+    provider: str,
+    model: str,
+    base_url: str,
+    api_key: str,
+) -> dict:
+    """解析 LLM 配置：将供应商名 + 参数解析为实际连接参数"""
+    defaults = PROVIDER_DEFAULTS.get(provider, {})
+    resolved = {
+        "name": f"{provider}-{model}",
+        "api_format": api_format,
+        "model_name": model,
+        "api_base": base_url or defaults.get("base_url", "http://localhost:8000/v1"),
+        "api_key": api_key or ("not-needed" if not defaults.get("needs_key", True) else ""),
+    }
+
+    # 若 openai 格式的 API Key 缺失但又有明确需要, 补警告
+    if api_format == "openai" and defaults.get("needs_key", True) and not api_key:
+        pass  # 实际用空 key 请求, 服务端会返回 401; 不设占位符避免误导
+
+    return resolved
+
 
 class Container:
-    """依赖注入容器，管理所有服务实例"""
+    """依赖注入容器，管理所有服务实例
 
-    _instance = None
-
-    def __new__(cls) -> "Container":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    非单例: 每个进程 (API / Worker) 创建自己的容器
+    """
 
     def __init__(self) -> None:
-        if hasattr(self, "_initialized") and self._initialized:
-            return
-        self._initialized = True
+        self._initialized = False
 
-        # 服务实例 (懒加载)
+        # 服务实例 (懒加载，实例变量保证每进程独立)
         self._vector_store: Optional[VectorStore] = None
         self._keyword_store: Optional[KeywordStore] = None
         self._embedding_model: Optional[EmbeddingModel] = None
         self._reranker: Optional[Reranker] = None
         self._llm_router: Optional[LLMRouter] = None
         self._pipeline: Optional[QueryPipeline] = None
+        self._milvus_client: Optional[MilvusClient] = None
+        self._keyword_client: Optional[MilvusKeywordStore] = None
 
     # ========== 工厂方法 ==========
 
     def get_vector_store(self) -> VectorStore:
         if self._vector_store is None:
-            self._vector_store = MilvusClient()
+            self._milvus_client = MilvusClient()
+            self._vector_store = self._milvus_client
         return self._vector_store
 
     def get_embedding_model(self) -> EmbeddingModel:
@@ -64,12 +102,11 @@ class Container:
         if self._keyword_store is None:
             store_type = settings.KEYWORD_STORE_TYPE
             if store_type == "milvus":
-                self._keyword_store = MilvusKeywordStore()
+                self._keyword_client = MilvusKeywordStore()
+                self._keyword_store = self._keyword_client
             elif store_type == "pgvector":
-                # Phase 2: 使用 PostgreSQL FTS
                 raise NotImplementedError("PostgreSQL FTS 关键词检索尚未实现")
             elif store_type == "simple":
-                # 轻量级: 内置 BM25 实现
                 raise NotImplementedError("Simple BM25 关键词检索尚未实现")
             else:
                 raise ValueError(f"未知的关键词存储类型: {store_type}")
@@ -92,7 +129,6 @@ class Container:
                     llm_router=self.get_llm_router(),
                 )
             elif pipeline_type == "agentic-rag":
-                # Phase 2: 替换为 AgenticRAGPipeline
                 raise NotImplementedError("Agentic RAG Pipeline 尚未实现")
             else:
                 raise ValueError(f"未知的 Pipeline 类型: {pipeline_type}")
@@ -126,7 +162,9 @@ class Container:
 
         # LLM 路由器 (预创建，不连接)
         self.get_llm_router()
-        logger.info(f"LLM 路由器已创建: 主={settings.LLM_PRIMARY_PROVIDER}, "
+        logger.info(f"LLM 路由器已创建: "
+                     f"主={settings.LLM_PROVIDER}/{settings.LLM_MODEL}"
+                     f"({settings.LLM_API_FORMAT}), "
                      f"备={'启用' if settings.LLM_FALLBACK_ENABLED else '禁用'}")
 
         # Pipeline
@@ -136,35 +174,50 @@ class Container:
         # Redis 缓存
         await conversation_cache.initialize()
 
+        # 事件总线
+        await event_bus.initialize()
+
+        self._initialized = True
         logger.info("所有服务初始化完成")
 
     async def close_all(self):
         """关闭所有服务"""
         logger.info("正在关闭所有服务...")
 
-        if self._vector_store:
-            await self._vector_store.close()
-        if self._keyword_store:
-            await self._keyword_store.close()
+        if self._milvus_client:
+            await self._milvus_client.close()
+        if self._keyword_client:
+            await self._keyword_client.close()
         if self._llm_router:
             await self._llm_router.close()
         await conversation_cache.close()
+        await event_bus.close()
 
         logger.info("所有服务已关闭")
 
     # ========== 内部 ==========
 
     def _build_llm_router(self) -> LLMRouter:
-        """构建 LLM 路由器"""
+        """构建 LLM 路由器（按 API 协议创建 Provider）"""
         primary = self._create_provider(
-            provider_type=settings.LLM_PRIMARY_PROVIDER,
-            is_primary=True,
+            api_format=settings.LLM_API_FORMAT,
+            provider=settings.LLM_PROVIDER,
+            model=settings.LLM_MODEL,
+            base_url=settings.LLM_BASE_URL,
+            api_key=settings.LLM_API_KEY,
+            thinking_enabled=settings.LLM_THINKING_ENABLED,
+            thinking_budget=settings.LLM_THINKING_BUDGET,
         )
         fallback = None
         if settings.LLM_FALLBACK_ENABLED:
             fallback = self._create_provider(
-                provider_type=settings.LLM_FALLBACK_PROVIDER,
-                is_primary=False,
+                api_format=settings.LLM_FALLBACK_API_FORMAT,
+                provider=settings.LLM_FALLBACK_PROVIDER,
+                model=settings.LLM_FALLBACK_MODEL,
+                base_url=settings.LLM_FALLBACK_BASE_URL,
+                api_key=settings.LLM_FALLBACK_API_KEY,
+                thinking_enabled=settings.LLM_FALLBACK_THINKING_ENABLED,
+                thinking_budget=settings.LLM_FALLBACK_THINKING_BUDGET,
             )
         return LLMRouter(
             primary=primary,
@@ -172,60 +225,63 @@ class Container:
             max_total_tokens=settings.LLM_MAX_TOTAL_TOKENS,
         )
 
-    def _create_provider(self, provider_type: str, is_primary: bool) -> LLMProvider:
-        """创建 LLM 供应商实例"""
-        if provider_type == "vllm":
-            return VLLMProvider(
-                api_base=settings.LLM_VLLM_BASE,
-                model_name=settings.LLM_VLLM_MODEL,
+    def _create_provider(
+        self,
+        api_format: str,
+        provider: str,
+        model: str,
+        base_url: str,
+        api_key: str,
+        thinking_enabled: bool = False,
+        thinking_budget: int = 2048,
+    ) -> LLMProvider:
+        """按 API 协议创建 Provider 实例"""
+        cfg = _resolve_llm_config(api_format, provider, model, base_url, api_key)
+
+        if cfg["api_format"] == "anthropic":
+            return AnthropicProvider(
+                api_key=cfg["api_key"],
+                model_name=cfg["model_name"],
                 timeout=settings.LLM_TIMEOUT,
                 max_retries=settings.LLM_MAX_RETRIES,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
             )
-        elif provider_type == "deepseek":
-            api_key = settings.LLM_DEEPSEEK_API_KEY
-            if not api_key:
-                api_key = "sk-placeholder"  # 让调用时失败而不是启动时崩溃
-                if is_primary:
-                    logger.warning("DeepSeek API Key 未配置，主模型将不可用")
-            return DeepSeekAPIProvider(
-                api_key=api_key,
-                model_name=settings.LLM_DEEPSEEK_MODEL,
-                timeout=settings.LLM_TIMEOUT,
-                max_retries=settings.LLM_MAX_RETRIES,
-            )
-        elif provider_type == "openai":
+        elif cfg["api_format"] == "openai":
             return OpenAICompatibleProvider(
-                name="openai-api",
-                api_base=settings.LLM_OPENAI_BASE,
-                api_key=settings.LLM_OPENAI_API_KEY,
-                model_name=settings.LLM_OPENAI_MODEL,
+                name=cfg["name"],
+                api_base=cfg["api_base"],
+                api_key=cfg["api_key"],
+                model_name=cfg["model_name"],
                 timeout=settings.LLM_TIMEOUT,
                 max_retries=settings.LLM_MAX_RETRIES,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
             )
         else:
-            raise ValueError(f"未知的 LLM 供应商: {provider_type}")
+            raise ValueError(f"不支持的 API 协议格式: {api_format}")
 
 
-# 全局容器
+# ========== 全局默认容器 (主进程用) ==========
 container = Container()
 
 
-# ========== FastAPI 依赖注入函数 ==========
+# ========== FastAPI 依赖注入函数 (同步，不做 IO) ==========
 
-async def get_vector_store() -> VectorStore:
+def get_vector_store() -> VectorStore:
     return container.get_vector_store()
 
-async def get_keyword_store() -> KeywordStore:
+def get_keyword_store() -> KeywordStore:
     return container.get_keyword_store()
 
-async def get_embedding_model() -> EmbeddingModel:
+def get_embedding_model() -> EmbeddingModel:
     return container.get_embedding_model()
 
-async def get_reranker() -> Reranker:
+def get_reranker() -> Reranker:
     return container.get_reranker()
 
-async def get_llm_router() -> LLMRouter:
+def get_llm_router() -> LLMRouter:
     return container.get_llm_router()
 
-async def get_pipeline() -> QueryPipeline:
+def get_pipeline() -> QueryPipeline:
     return container.get_pipeline()

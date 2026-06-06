@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -27,6 +29,7 @@ type ServerConfig struct {
 	ReadTimeout    time.Duration `yaml:"read_timeout"`
 	WriteTimeout   time.Duration `yaml:"write_timeout"`
 	MaxHeaderBytes int           `yaml:"max_header_bytes"`
+	MaxBodyBytes   int64         `yaml:"max_body_bytes"` // 请求体大小限制 (字节)
 }
 
 // LogConfig 日志配置
@@ -54,28 +57,38 @@ type RedisConfig struct {
 
 // JWTConfig JWT 配置
 type JWTConfig struct {
-	Secret       string `yaml:"secret"`
-	ExpiryHours  int    `yaml:"expiry_hours"`
+	Secret      string `yaml:"secret"`
+	ExpiryHours int    `yaml:"expiry_hours"`
 }
 
 // RateLimitConfig 限流配置
 type RateLimitConfig struct {
-	Enabled          bool    `yaml:"enabled"`
+	Enabled           bool    `yaml:"enabled"`
+	Type              string  `yaml:"type"` // "local" (内存令牌桶) | "redis" (分布式)
 	RequestsPerSecond float64 `yaml:"requests_per_second"`
-	Burst            int     `yaml:"burst"`
+	Burst             int     `yaml:"burst"`
 }
 
 // ServicesConfig 后端服务配置
 type ServicesConfig struct {
-	RAGService  ServiceEndpoint `yaml:"rag_service"`
-	LLMService  ServiceEndpoint `yaml:"llm_service"`
+	RAGService ServiceEndpoint `yaml:"rag_service"`
+	LLMService ServiceEndpoint `yaml:"llm_service"`
 }
 
 // ServiceEndpoint 服务端点
 type ServiceEndpoint struct {
-	BaseURL    string `yaml:"base_url"`
-	Timeout    time.Duration `yaml:"timeout"`
-	RetryCount int    `yaml:"retry_count"`
+	BaseURL        string               `yaml:"base_url"`
+	Timeout        time.Duration        `yaml:"timeout"`
+	RetryCount     int                  `yaml:"retry_count"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+}
+
+// CircuitBreakerConfig 熔断器配置
+type CircuitBreakerConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	FailureCount    int    `yaml:"failure_count"`    // 连续失败次数触发熔断
+	RecoveryTimeout string `yaml:"recovery_timeout"` // 熔断后恢复时间 (e.g. "30s")
+	HalfOpenMax     int    `yaml:"half_open_max"`    // 半开状态最大请求数
 }
 
 // CORSConfig CORS 配置
@@ -85,7 +98,7 @@ type CORSConfig struct {
 	AllowedHeaders []string `yaml:"allowed_headers"`
 }
 
-// Load 从文件加载配置
+// Load 从文件加载配置，支持环境变量覆盖
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -104,8 +117,63 @@ func Load(path string) (*Config, error) {
 	if cfg.Server.Mode == "" {
 		cfg.Server.Mode = "release"
 	}
+	if cfg.Server.MaxBodyBytes == 0 {
+		cfg.Server.MaxBodyBytes = 10 << 20 // 默认 10MB
+	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
+	}
+	if cfg.RateLimit.Type == "" {
+		cfg.RateLimit.Type = "local"
+	}
+	if cfg.Services.RAGService.RetryCount <= 0 {
+		cfg.Services.RAGService.RetryCount = 2
+	}
+	if cfg.Services.RAGService.CircuitBreaker.FailureCount <= 0 {
+		cfg.Services.RAGService.CircuitBreaker.FailureCount = 5
+	}
+	if cfg.Services.RAGService.CircuitBreaker.RecoveryTimeout == "" {
+		cfg.Services.RAGService.CircuitBreaker.RecoveryTimeout = "30s"
+	}
+	if cfg.Services.RAGService.CircuitBreaker.HalfOpenMax <= 0 {
+		cfg.Services.RAGService.CircuitBreaker.HalfOpenMax = 3
+	}
+
+	// 环境变量覆盖 JWT Secret
+	if envSecret := os.Getenv("JWT_SECRET"); envSecret != "" {
+		cfg.JWT.Secret = envSecret
+	}
+
+	// 环境变量覆盖数据库 DSN（包含 sslmode 控制）
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		cfg.Database.DSN = envDSN
+	}
+	// 单独控制 SSL（使用 url.Values 正确拼接参数，避免 ?/& 混淆）
+	if sslMode := os.Getenv("DB_SSLMODE"); sslMode != "" {
+		if cfg.Database.DSN != "" {
+			parsed, err := url.Parse(cfg.Database.DSN)
+			if err == nil {
+				q := parsed.Query()
+				q.Set("sslmode", sslMode)
+				parsed.RawQuery = q.Encode()
+				cfg.Database.DSN = parsed.String()
+			}
+			// 解析失败时不修改 DSN（保持原样，让 database/sql 后续报错）
+		}
+	}
+
+	// 校验 JWT Secret — 防止默认值上生产
+	if cfg.JWT.Secret == "" || cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
+		// 注意: 这里不能 log，因为 logger 还没初始化。调用方会检查。
+		cfg.JWT.Secret = os.Getenv("JWT_SECRET")
+		if cfg.JWT.Secret == "" {
+			cfg.JWT.Secret = "change-this-to-a-secure-jwt-secret"
+		}
+	}
+
+	// 生产环境强制要求环境变量
+	if cfg.Server.Mode == "release" && cfg.JWT.Secret == "change-this-to-a-secure-jwt-secret" {
+		return nil, fmt.Errorf("production mode requires JWT_SECRET environment variable to be set to a secure random string")
 	}
 
 	return cfg, nil

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-qa-system/gateway/internal/config"
@@ -9,8 +10,42 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
+
+// 上下文键常量 (与 handler 保持一致)
+const (
+	ContextKeyUserID    = "user_id"
+	ContextKeyUserRole  = "user_role"
+	ContextKeyUsername  = "username"
+	ContextKeyRequestID = "request_id"
+)
+
+// ==================== 日志记录器 ====================
+// 使用 atomic.Value 实现无锁读写 + sync.Once 懒初始化
+//
+// SetLogger 在 main.go 启动时调用一次，中间件中的 getLogger 通过 atomic.Load
+// 读取，无需互斥锁。如果 SetLogger 在中间件触发前尚未调用，自动 fallback 到 zap.NewProduction()。
+
+var (
+	loggerAtomic atomic.Value // stores *zap.SugaredLogger
+)
+
+// SetLogger 设置 middleware 包使用的 Logger (启动时调用一次)
+func SetLogger(l *zap.SugaredLogger) {
+	loggerAtomic.Store(l)
+}
+
+// getLogger 获取 Logger（无锁读取；nil 时 lazy 初始化兜底）
+func getLogger() *zap.SugaredLogger {
+	if l, ok := loggerAtomic.Load().(*zap.SugaredLogger); ok && l != nil {
+		return l
+	}
+	// Lazy fallback: SetLogger 尚未调用时使用默认 logger
+	l, _ := zap.NewProduction()
+	sugar := l.Sugar()
+	loggerAtomic.Store(sugar)
+	return sugar
+}
 
 // RequestID 为每个请求注入唯一 ID
 func RequestID() gin.HandlerFunc {
@@ -19,7 +54,7 @@ func RequestID() gin.HandlerFunc {
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
-		c.Set("request_id", requestID)
+		c.Set(ContextKeyRequestID, requestID)
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}
@@ -36,7 +71,7 @@ func Logging(logger *zap.SugaredLogger) gin.HandlerFunc {
 
 		latency := time.Since(start)
 		statusCode := c.Writer.Status()
-		requestID, _ := c.Get("request_id")
+		requestID, _ := c.Get(ContextKeyRequestID)
 
 		logger.Infow("API 请求",
 			"request_id", requestID,
@@ -62,28 +97,17 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	})
 }
 
-// RateLimiter 基于令牌桶的限流
+// RateLimiter 限流中间件 (支持 local 和 redis 两种模式)
 func RateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	if !cfg.Enabled {
 		return func(c *gin.Context) { c.Next() }
 	}
 
-	limiter := rate.NewLimiter(
-		rate.Limit(cfg.RequestsPerSecond),
-		cfg.Burst,
-	)
-
-	return func(c *gin.Context) {
-		if !limiter.Allow() {
-			c.JSON(429, gin.H{
-				"error":   "请求过于频繁，请稍后重试",
-				"code":    "RATE_LIMIT_EXCEEDED",
-				"retry_after": "1s",
-			})
-			c.Abort()
-			return
-		}
-		c.Next()
+	switch cfg.Type {
+	case "redis":
+		return redisRateLimiter(cfg)
+	default:
+		return localRateLimiter(cfg)
 	}
 }
 
@@ -105,6 +129,16 @@ func Authenticate(secret string) gin.HandlerFunc {
 			token = token[7:]
 		}
 
+		// 检查 Token 是否已被吊销（登出）
+		if isTokenRevoked(token) {
+			c.JSON(401, gin.H{
+				"error": "令牌已失效，请重新登录",
+				"code":  "TOKEN_REVOKED",
+			})
+			c.Abort()
+			return
+		}
+
 		claims, err := ValidateJWT(token, secret)
 		if err != nil {
 			c.JSON(401, gin.H{
@@ -116,9 +150,9 @@ func Authenticate(secret string) gin.HandlerFunc {
 		}
 
 		// 将用户信息注入上下文
-		c.Set("user_id", claims.UserID)
-		c.Set("user_role", claims.Role)
-		c.Set("username", claims.Username)
+		c.Set(ContextKeyUserID, claims.UserID)
+		c.Set(ContextKeyUserRole, claims.Role)
+		c.Set(ContextKeyUsername, claims.Username)
 		c.Next()
 	}
 }
@@ -126,7 +160,7 @@ func Authenticate(secret string) gin.HandlerFunc {
 // AdminRequired 管理员权限中间件
 func AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role, exists := c.Get("user_role")
+		role, exists := c.Get(ContextKeyUserRole)
 		if !exists || role.(string) != "admin" {
 			c.JSON(403, gin.H{
 				"error": "无权限执行此操作",

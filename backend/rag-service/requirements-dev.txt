@@ -1,0 +1,17 @@
+# ============================================
+# RAG 服务 - 测试依赖
+# ============================================
+
+# 核心框架
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+pytest-cov>=5.0.0
+pytest-mock>=3.14.0
+httpx>=0.26.0
+
+# Mock 数据库
+# fakeredis 用于模拟 Redis Streams
+fakeredis[lua]>=2.25.0
+
+# AI 模型测试 (轻量 mock 替代)
+# 不安装 torch/transformers，所有 AI 模型通过 mock 测试

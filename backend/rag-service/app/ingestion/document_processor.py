@@ -247,40 +247,46 @@ class DocumentProcessor:
 
     def _fixed_size_chunks(self, text: str) -> List[str]:
         """固定窗口分块 (带重叠)"""
-        import tiktoken
-
-        # 尝试用 tiktoken 计算 token
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            tokens = enc.encode(text)
-        except ImportError:
-            # 降级: 按字符估算 (中文字符 ≈ 2 tokens)
-            tokens = list(text)
-
         chunk_size = settings.CHUNK_SIZE
         overlap = settings.CHUNK_OVERLAP
+        text_len = len(text)
         chunks = []
 
-        if len(tokens) <= chunk_size:
-            if isinstance(tokens[0], str) if tokens else False:
-                return [text]
-            return [enc.decode(tokens)] if not isinstance(tokens[0], str) else [text]
+        # 优先使用 tiktoken 按 token 分块
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            tokens = enc.encode(text)
+            using_tiktoken = True
+        except ImportError:
+            using_tiktoken = False
 
-        start = 0
-        while start < len(tokens):
-            end = min(start + chunk_size, len(tokens))
-            chunk_tokens = tokens[start:end]
+        if using_tiktoken:
+            if len(tokens) <= chunk_size:
+                return [enc.decode(tokens)]
 
-            if isinstance(chunk_tokens[0], str) if chunk_tokens else False:
-                chunk_text = "".join(chunk_tokens)
-            else:
+            start = 0
+            while start < len(tokens):
+                end = min(start + chunk_size, len(tokens))
+                chunk_tokens = tokens[start:end]
                 try:
                     chunk_text = enc.decode(chunk_tokens)
                 except Exception as e:
                     logger.debug(f"Token decode 失败，回退到字符截断: {e}")
                     chunk_text = text[start:end]
+                chunks.append(chunk_text)
+                start += chunk_size - overlap
+            return chunks
 
-            chunks.append(chunk_text)
+        # 降级: 按字符分块
+        if text_len <= chunk_size:
+            return [text]
+
+        chunk_size = min(chunk_size, text_len)
+        start = 0
+        while start < text_len:
+            end = min(start + chunk_size, text_len)
+            chunks.append(text[start:end])
             start += chunk_size - overlap
 
         return chunks

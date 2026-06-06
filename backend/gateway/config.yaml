@@ -30,6 +30,7 @@ jwt:
 
 rate_limit:
   enabled: true
+  type: "redis"      # "local" (单实例内存) | "redis" (多副本分布式)
   requests_per_second: 100
   burst: 200
 

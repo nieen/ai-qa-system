@@ -3,6 +3,7 @@ RAG 服务配置
 支持通过环境变量覆盖，优先级: 环境变量 > .env 文件 > 默认值
 """
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
@@ -10,6 +11,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI-QA-RAG-Service"
     APP_PORT: int = 8001
     APP_LOG_LEVEL: str = "info"
+    APP_LOG_FORMAT: str = "console"  # console | json
     APP_SECRET_KEY: str = "change-this-to-a-random-secret-key"
 
     # --- 数据库 (PostgreSQL) ---
@@ -39,25 +41,47 @@ class Settings(BaseSettings):
     # simple  = 轻量级内置 BM25 (无需额外服务)
     KEYWORD_STORE_TYPE: str = "milvus"
 
-    # ============ LLM 多供应商配置 ============
+    # ============ LLM 配置 ============
+    #
+    # 设计原则: 按 API 协议区分, 不按部署模式区分
+    #
+    # API 格式 (LLM_API_FORMAT):
+    #   "openai"    → OpenAI 兼容格式 (/v1/chat/completions)
+    #                 适用于: vLLM, OpenAI, DeepSeek, Ollama, Groq 等
+    #   "anthropic" → Anthropic Messages 格式 (/v1/messages)
+    #                 适用于: Claude 系列
+    #
+    # 供应商 (LLM_PROVIDER):
+    #   用于设置默认端点、API Key 策略、指标标签
+    #   "openai"    → https://api.openai.com/v1 (需 Key)
+    #   "deepseek"  → https://api.deepseek.com (需 Key)
+    #   "vllm"      → http://localhost:8000/v1 (无需 Key)
+    #   "ollama"    → http://localhost:11434/v1 (无需 Key)
+    #   "anthropic" → https://api.anthropic.com/v1 (需 Key)
 
-    # --- 主模型 (Primary LLM) ---
-    # 可选: vllm | deepseek | openai
-    LLM_PRIMARY_PROVIDER: str = "vllm"
-    # vLLM 本地
-    LLM_VLLM_BASE: str = "http://localhost:8000/v1"
-    LLM_VLLM_MODEL: str = "deepseek-r1"
-    # DeepSeek 官方 API
-    LLM_DEEPSEEK_API_KEY: str = ""
-    LLM_DEEPSEEK_MODEL: str = "deepseek-chat"
-    # OpenAI 通用兼容
-    LLM_OPENAI_BASE: str = ""
-    LLM_OPENAI_API_KEY: str = ""
-    LLM_OPENAI_MODEL: str = "gpt-4o-mini"
+    # --- 主模型 ---
+    LLM_API_FORMAT: str = "openai"          # openai | anthropic
+    LLM_PROVIDER: str = "vllm"              # 供应商名 (默认端点/Key策略/标签)
+    LLM_MODEL: str = "deepseek-r1"          # 模型名
+    LLM_BASE_URL: str = ""                  # API 端点 (留空自动推导)
+    LLM_API_KEY: str = ""                   # API Key (留空自动推导)
 
-    # --- 备用模型 (Fallback LLM) ---
+    # --- 多模态 ---
+    LLM_SUPPORTS_MULTIMODAL: bool = False   # 模型是否支持图片输入
+
+    # --- 思考/推理模式 ---
+    LLM_THINKING_ENABLED: bool = False      # 是否启用思考模式
+    LLM_THINKING_BUDGET: int = 2048         # 思考 token 预算
+
+    # --- 备用模型 (主模型不可用时自动切换) ---
     LLM_FALLBACK_ENABLED: bool = True
-    LLM_FALLBACK_PROVIDER: str = "deepseek"  # 主模型不可用时切换到 DeepSeek API
+    LLM_FALLBACK_API_FORMAT: str = "openai"
+    LLM_FALLBACK_PROVIDER: str = "deepseek"
+    LLM_FALLBACK_MODEL: str = "deepseek-chat"
+    LLM_FALLBACK_BASE_URL: str = ""
+    LLM_FALLBACK_API_KEY: str = ""
+    LLM_FALLBACK_THINKING_ENABLED: bool = False
+    LLM_FALLBACK_THINKING_BUDGET: int = 1024
 
     # --- LLM 通用参数 ---
     LLM_MAX_TOKENS: int = 8192
@@ -75,11 +99,15 @@ class Settings(BaseSettings):
     # ============ 检索参数 ============
 
     # --- Embedding ---
-    EMBEDDING_MODEL: str = "BAAI/bge-m3"
-    EMBEDDING_DIM: int = 1024
+    EMBEDDING_MODEL: str = "shibing624/text2vec-base-chinese"
+    EMBEDDING_DIM: int = 768
     EMBEDDING_DEVICE: str = "cuda"
     EMBEDDING_BATCH_SIZE: int = 32
     EMBEDDING_MAX_LENGTH: int = 512
+    # 嵌入降级: 嵌入模型不可用时，尝试远程 API (兼容 OpenAI 格式)
+    EMBEDDING_FALLBACK_API_URL: str = ""       # 如 https://api.openai.com/v1/embeddings
+    EMBEDDING_FALLBACK_API_KEY: str = ""
+    EMBEDDING_FALLBACK_MODEL: str = "text-embedding-3-small"
 
     # --- Reranker ---
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
@@ -105,9 +133,19 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_HOURS: int = 24
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # --- CORS ---
+    # 逗号分隔的允许来源，默认全放通 (开发环境)
+    CORS_ALLOWED_ORIGINS: str = "*"
+
+    # ============ OpenTelemetry 追踪 ============
+    OTEL_ENABLED: bool = True
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""  # 空 = 仅日志输出
+    OTEL_SERVICE_NAME: str = "rag-service"
+
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
 
 settings = Settings()

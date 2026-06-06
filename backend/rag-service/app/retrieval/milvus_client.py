@@ -1,46 +1,78 @@
 """
 Milvus 向量数据库客户端
-负责向量存储、混合检索（稠密+稀疏+BM25）
+负责向量存储、混合检索（稠密语义检索 + BM25 关键词匹配）
 """
+import asyncio
 import json
 import logging
 from typing import List, Optional, Dict, Any
 
 from config.settings import settings
-from app.core.protocols import VectorStore, KeywordStore, Document as DocModel, RetrievedChunk
+from app.core.protocols import VectorStore, KeywordStore, Document, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
 
+class MilvusRetryError(Exception):
+    """Milvus 操作重试耗尽后抛出的异常"""
+    pass
+
+
+async def _retry_milvus(operation, max_retries: int = 3, base_delay: float = 1.0):
+    """
+    通用的 Milvus 重试包装器
+    Args:
+        operation: 异步可调用对象 (awaitable)
+        max_retries: 最大重试次数
+        base_delay: 初始延迟（毫秒），指数退避
+    """
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await operation()
+        except Exception as e:
+            last_exc = e
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Milvus 操作失败 (重试 %d/%d): %s, %.1fms 后重试",
+                    attempt + 1, max_retries, e, delay,
+                )
+                await asyncio.sleep(delay / 1000)
+            else:
+                logger.error("Milvus 操作重试耗尽 (%d 次): %s", max_retries, e)
+
+    raise MilvusRetryError(f"Milvus 操作在 {max_retries} 次重试后仍然失败: {last_exc}")
+
+
 class MilvusClient(VectorStore):
     """Milvus 向量数据库客户端"""
-    
-    # 注意: 实例由 Container 管理，不在此使用全局单例
-    _is_initialized = False
+
+    def __init__(self):
+        self._is_initialized = False
 
     async def initialize(self):
         if self._is_initialized:
             return
 
         try:
-            from pymilvus import (
-                connections,
-                Collection,
-                CollectionSchema,
-                FieldSchema,
-                DataType,
-                utility,
-            )
+            from pymilvus import connections
 
-            # 连接 Milvus
-            connections.connect(
-                alias=settings.MILVUS_COLLECTION_PREFIX.strip("_"),
-                host=settings.MILVUS_HOST,
-                port=settings.MILVUS_PORT,
-            )
+            async def _connect():
+                connections.connect(
+                    alias=settings.MILVUS_COLLECTION_PREFIX.strip("_"),
+                    host=settings.MILVUS_HOST,
+                    port=settings.MILVUS_PORT,
+                )
+                return True
+
+            await _retry_milvus(_connect, max_retries=3, base_delay=1000)
             logger.info(f"Milvus 连接成功: {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
 
             self._is_initialized = True
+        except MilvusRetryError as e:
+            logger.warning(f"Milvus 连接失败 (已重试): {e}")
+            logger.warning("搜索功能将不可用")
         except Exception as e:
             logger.warning(f"Milvus 连接失败: {e}")
             logger.warning("搜索功能将不可用")
@@ -121,11 +153,11 @@ class MilvusClient(VectorStore):
     async def insert(
         self,
         collection_name: str,
-        documents: List[DocModel],
+        documents: List[Document],
         embeddings: List[List[float]],
     ):
         """
-        插入向量数据
+        插入向量数据 (带重试)
         Args:
             collection_name: 集合名称
             documents: 文档块 (Document 对象)
@@ -137,7 +169,6 @@ class MilvusClient(VectorStore):
         from pymilvus import Collection
 
         full_name = f"{settings.MILVUS_COLLECTION_PREFIX}{collection_name}"
-        collection = Collection(name=full_name)
 
         # 准备插入数据
         insert_data = []
@@ -152,11 +183,19 @@ class MilvusClient(VectorStore):
                 "metadata": json.dumps(doc.metadata, ensure_ascii=False),
             })
 
-        result = collection.insert(insert_data)
-        collection.flush()
+        async def _do_insert():
+            collection = Collection(name=full_name)
+            result = collection.insert(insert_data)
+            collection.flush()
+            return result
 
-        logger.info(f"写入 {len(documents)} 个向量到 {full_name}")
-        return result
+        try:
+            result = await _retry_milvus(_do_insert, max_retries=3, base_delay=500)
+            logger.info(f"写入 {len(documents)} 个向量到 {full_name}")
+            return result
+        except MilvusRetryError as e:
+            logger.error(f"Milvus 写入失败 (已重试): {e}")
+            raise
 
     async def similarity_search(
         self,
@@ -264,12 +303,10 @@ def _parse_metadata(raw: Any) -> Dict[str, Any]:
 class MilvusKeywordStore(KeywordStore):
     """
     Milvus 关键词检索实现 (利用 Milvus 内置 BM25)
-
-    实现了 KeywordStore 接口，不依赖向量库是否支持混合检索。
-    PGVector 用户可替换为 PGFTSStore (PostgreSQL 全文检索)。
     """
 
-    _is_initialized = False
+    def __init__(self):
+        self._is_initialized = False
 
     async def initialize(self):
         self._is_initialized = True
@@ -341,5 +378,4 @@ class MilvusKeywordStore(KeywordStore):
         pass
 
 
-# 全局单例
-milvus_client = MilvusClient()
+# 全局单例由 Container 管理，不在模块层面创建

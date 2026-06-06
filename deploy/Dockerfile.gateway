@@ -1,5 +1,5 @@
 # Go API 网关 Dockerfile
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 WORKDIR /build
 COPY backend/gateway/ .
 RUN go mod tidy && CGO_ENABLED=0 go build -o gateway ./cmd/main.go
