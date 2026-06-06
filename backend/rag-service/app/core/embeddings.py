@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import List
 import numpy as np
+import httpx
 
 from config.settings import settings
 
@@ -92,12 +93,51 @@ class EmbeddingManager:
             )
             return embeddings.tolist()
         else:
-            # 降级: 返回随机向量 (仅用于测试)
-            logger.warning("使用降级嵌入: 生成随机向量")
-            return [
-                np.random.randn(settings.EMBEDDING_DIM).tolist()
-                for _ in texts
-            ]
+            # 降级: 尝试远程嵌入 API，失败时抛出异常（避免存入无效向量）
+            logger.warning("嵌入模型不可用，尝试远程 API 降级")
+            return await self._fallback_embed_remote(texts)
+
+    async def _fallback_embed_remote(self, texts: List[str]) -> List[List[float]]:
+        """远程嵌入 API 降级 (兼容 OpenAI Embedding 格式)"""
+        api_url = settings.EMBEDDING_FALLBACK_API_URL
+        if not api_url:
+            raise RuntimeError(
+                f"嵌入模型不可用（模型: {settings.EMBEDDING_MODEL}）"
+                "且未配置 EMBEDDING_FALLBACK_API_URL"
+            )
+
+        try:
+            headers = {"Content-Type": "application/json"}
+            if settings.EMBEDDING_FALLBACK_API_KEY:
+                headers["Authorization"] = f"Bearer {settings.EMBEDDING_FALLBACK_API_KEY}"
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    api_url,
+                    json={
+                        "input": texts,
+                        "model": settings.EMBEDDING_FALLBACK_MODEL,
+                    },
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            embeddings = [item["embedding"] for item in data["data"]]
+            logger.info(
+                "远程嵌入 API 调用成功: %d 条向量, 模型=%s",
+                len(embeddings),
+                settings.EMBEDDING_FALLBACK_MODEL,
+            )
+            return embeddings
+
+        except Exception as e:
+            raise RuntimeError(
+                f"嵌入模型完全不可用（嵌入模型 + 远程 API 均失败）。"
+                f"模型: {settings.EMBEDDING_MODEL}, "
+                f"远程: {settings.EMBEDDING_FALLBACK_API_URL}, "
+                f"错误: {e}"
+            )
 
     async def embed_query(self, text: str) -> List[float]:
         """单条查询向量化"""

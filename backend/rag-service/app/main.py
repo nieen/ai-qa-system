@@ -109,12 +109,21 @@ Reranker 重排序、LLM 流式问答等核心 RAG 能力。
     },
 )
 
-# CORS 配置 (生产环境需限制 origin)
-cors_origins = settings.CORS_ALLOWED_ORIGINS.split(",") if settings.CORS_ALLOWED_ORIGINS else ["*"]
+# CORS 配置
+# "*" 允许所有来源（开发环境），此时 allow_credentials 必须为 False
+# 逗号分隔的域名列表（生产环境），allow_credentials 正常工作
+raw_origins = settings.CORS_ALLOWED_ORIGINS
+if raw_origins == "*":
+    cors_origins = ["*"]
+    allow_creds = False
+else:
+    cors_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    allow_creds = True
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=allow_creds,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )

@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     EMBEDDING_DEVICE: str = "cuda"
     EMBEDDING_BATCH_SIZE: int = 32
     EMBEDDING_MAX_LENGTH: int = 512
+    # 嵌入降级: 嵌入模型不可用时，尝试远程 API (兼容 OpenAI 格式)
+    EMBEDDING_FALLBACK_API_URL: str = ""       # 如 https://api.openai.com/v1/embeddings
+    EMBEDDING_FALLBACK_API_KEY: str = ""
+    EMBEDDING_FALLBACK_MODEL: str = "text-embedding-3-small"
 
     # --- Reranker ---
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"

@@ -15,7 +15,7 @@ import json
 import logging
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text as sql_text
@@ -256,11 +256,14 @@ async def get_document_status(kb_id: str, doc_id: str):
     """,
     tags=["问答"],
 )
-async def chat(kb_id: str, req: ChatRequest):
+async def chat(kb_id: str, req: ChatRequest, http_request: Request):
     """知识库问答 (SSE 流式响应)"""
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "问题不能为空")
+
+    # 透传 Go 网关传递的 X-Request-ID，保持链路追踪完整性
+    request_id = http_request.headers.get("X-Request-ID", "")
 
     pipeline = get_pipeline()
 
@@ -295,14 +298,18 @@ async def chat(kb_id: str, req: ChatRequest):
             elif event.type == "llm.error":
                 yield f"data: {json.dumps({'type': 'error', 'content': event.data['content']})}\n\n"
 
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    if request_id:
+        headers["X-Request-ID"] = request_id
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=headers,
     )
 
 

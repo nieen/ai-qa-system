@@ -201,7 +201,7 @@ class NaiveRAGPipeline(QueryPipeline):
             full_response = []
             llm_start = time.monotonic()
             first_token_time: Optional[float] = None
-            provider_name = getattr(self._llm_router._primary, "_name", "unknown")
+            provider_name = self._llm_router.current_model
 
             try:
                 with start_span("rag.llm.call", {
