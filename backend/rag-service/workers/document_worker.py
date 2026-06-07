@@ -26,6 +26,7 @@ from app.core.event_bus import (
 from app.ingestion.document_processor import document_processor
 from app.core.protocols import Document as DocModel
 from app.core.container import container
+from app.core.storage import storage_client
 
 logging.basicConfig(
     level=getattr(logging, settings.APP_LOG_LEVEL.upper()),
@@ -68,6 +69,16 @@ async def process_message(msg: dict) -> bool:
     file_type = data.get("file_type", "")
     file_name = data.get("file_name", "")
 
+    # 如果消息包含 MinIO 对象路径，优先从 MinIO 下载
+    minio_object = data.get("minio_object", "")
+    if minio_object and settings.MINIO_ENDPOINT != "localhost:9000":
+        local_path = f"tmp/{uuid.uuid4()}_{file_name}"
+        os.makedirs("tmp", exist_ok=True)
+        success = await storage_client.download(settings.MINIO_BUCKET, minio_object, local_path)
+        if success:
+            file_path = local_path
+            logger.info(f"已从 MinIO 下载: {minio_object} -> {local_path}")
+
     if not all([kb_id, doc_id, file_path]):
         logger.warning(f"消息参数不完整: {stream_id}")
         return True  # ACK 不完整消息，不阻塞队列
@@ -104,8 +115,8 @@ async def process_message(msg: dict) -> bool:
         vector_store = container.get_vector_store()
         await vector_store.insert(kb_id, documents, embeddings)
 
-        # Step 4: 清理临时文件
-        if os.path.exists(file_path):
+        # Step 4: 清理临时文件（仅清理本地临时下载的文件，保留 MinIO 持久化存储）
+        if file_path.startswith("tmp/") and os.path.exists(file_path):
             os.remove(file_path)
 
         # Step 5: 发布完成状态

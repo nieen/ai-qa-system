@@ -17,6 +17,7 @@ from app.core.protocols import (
 from app.core.llm_router import LLMRouter
 from app.core.cache import conversation_cache
 from app.core.event_bus import event_bus
+from app.core.storage import StorageClient, storage_client
 from app.core.pipeline import NaiveRAGPipeline
 from app.retrieval.milvus_client import MilvusClient, MilvusKeywordStore
 from app.core.embeddings import EmbeddingManager
@@ -77,6 +78,7 @@ class Container:
         self._reranker: Optional[Reranker] = None
         self._llm_router: Optional[LLMRouter] = None
         self._pipeline: Optional[QueryPipeline] = None
+        self._storage: Optional[StorageClient] = None
         self._milvus_client: Optional[MilvusClient] = None
         self._keyword_client: Optional[MilvusKeywordStore] = None
 
@@ -111,6 +113,11 @@ class Container:
             else:
                 raise ValueError(f"未知的关键词存储类型: {store_type}")
         return self._keyword_store
+
+    def get_storage(self) -> StorageClient:
+        if self._storage is None:
+            self._storage = StorageClient()
+        return self._storage
 
     def get_llm_router(self) -> LLMRouter:
         if self._llm_router is None:
@@ -177,6 +184,10 @@ class Container:
         # 事件总线
         await event_bus.initialize()
 
+        # 对象存储
+        await self.get_storage().initialize()
+        logger.info("对象存储已初始化")
+
         self._initialized = True
         logger.info("所有服务初始化完成")
 
@@ -192,6 +203,8 @@ class Container:
             await self._llm_router.close()
         await conversation_cache.close()
         await event_bus.close()
+        if self._storage:
+            await self._storage.close()
 
         logger.info("所有服务已关闭")
 

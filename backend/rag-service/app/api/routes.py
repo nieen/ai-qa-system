@@ -21,9 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.container import get_vector_store, get_pipeline, get_llm_router
+from app.core.container import get_vector_store, get_pipeline, get_llm_router, get_storage
 from app.core.database import get_db
 from app.core.event_bus import event_bus, STREAM_DOC_INGESTION, GROUP_DOC_WORKERS
+from app.core.storage import storage_client
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,10 @@ async def upload_document(
 
     doc_id = str(uuid.uuid4())
 
+    # 上传到 MinIO
+    object_name = f"{kb_id}/{doc_id}/{file.filename}"
+    await storage_client.upload_from_bytes(settings.MINIO_BUCKET, object_name, content)
+
     # 发布任务到 Redis Stream
     msg_id = await event_bus.publish(
         STREAM_DOC_INGESTION,
@@ -187,6 +192,7 @@ async def upload_document(
             "file_path": tmp_path,
             "file_type": file_type,
             "file_name": file.filename,
+            "minio_object": object_name,
         },
     )
 
