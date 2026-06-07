@@ -286,43 +286,25 @@ func CascadeDeleteUserData(userID string) error {
 	}
 	defer tx.Rollback()
 
-	// 1. 删除消息 (通过 conversation 关联)
-	if _, err := tx.Exec(`
-		DELETE FROM messages WHERE conversation_id IN
-		(SELECT id FROM conversations WHERE user_id = $1)
-	`, userID); err != nil {
-		return fmt.Errorf("删除消息失败: %w", err)
-	}
+	// 注意: messages, conversations, documents 由 RAG 服务负责清理
+	// 网关在调用此函数前会先通过 RAG API 删除 RAG 所属数据
 
-	// 2. 删除对话
-	if _, err := tx.Exec(`DELETE FROM conversations WHERE user_id = $1`, userID); err != nil {
-		return fmt.Errorf("删除对话失败: %w", err)
-	}
-
-	// 3. 删除用户上传的文档 (逻辑删除，保留知识库结构)
-	if _, err := tx.Exec(`
-		UPDATE documents SET title = '[已删除]', file_path = NULL
-		WHERE created_by = $1
-	`, userID); err != nil {
-		return fmt.Errorf("删除文档关联失败: %w", err)
-	}
-
-	// 4. 删除审计日志
+	// 1. 删除审计日志
 	if _, err := tx.Exec(`DELETE FROM audit_logs WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("删除审计日志失败: %w", err)
 	}
 
-	// 5. 删除同意记录
+	// 2. 删除同意记录
 	if _, err := tx.Exec(`DELETE FROM user_consents WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("删除同意记录失败: %w", err)
 	}
 
-	// 6. 删除删除请求
+	// 3. 删除删除请求
 	if _, err := tx.Exec(`DELETE FROM deletion_requests WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("删除请求记录失败: %w", err)
 	}
 
-	// 7. 删除用户
+	// 4. 删除用户
 	if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, userID); err != nil {
 		return fmt.Errorf("删除用户失败: %w", err)
 	}
@@ -491,10 +473,10 @@ type SystemStats struct {
 func GetSystemStats() (*SystemStats, error) {
 	stats := &SystemStats{}
 
-	DB.QueryRow(`SELECT COUNT(*) FROM knowledge_bases`).Scan(&stats.TotalKBs)
-	DB.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&stats.TotalDocuments)
-	DB.QueryRow(`SELECT COALESCE(SUM(chunk_count), 0) FROM documents`).Scan(&stats.TotalChunks)
 	DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&stats.TotalUsers)
+
+	// 注意: knowledge_bases, documents 表的统计由 RAG 服务提供 (数据归属 RAG)
+	// 此处保留字段仅为类型兼容，实际值通过 /api/v1/admin/stats 代理获取后合并
 
 	return stats, nil
 }

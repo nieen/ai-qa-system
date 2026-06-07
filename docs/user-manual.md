@@ -269,15 +269,14 @@ data: {"type": "done", "conversation_id": "xxx", "sources": [...]}
 ### Q: 回答速度慢？
 
 **影响因素**:
-- LLM 模型大小（大模型推理慢但质量高）
-- GPU 负载（多人同时使用时需要排队）
+- LLM API 响应速度（不同供应商和模型差异较大）
 - 文档数量（大量文档会增加检索时间）
-- 网络延迟（使用远程 API 时）
+- 网络延迟（连接到 LLM API 的网络质量）
 
 **优化建议**:
-- 使用较小的模型（如 DeepSeek-R1-Distill-Qwen-7B）
+- 选择响应更快的 API 模型（如 DeepSeek-Chat 比 Claude Sonnet 通常更快）
 - 降低知识库中文档数量
-- 联系管理员检查 GPU 负载
+- 检查服务器到 LLM API 的网络延迟
 
 ### Q: 如何确保数据安全？
 

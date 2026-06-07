@@ -66,14 +66,17 @@ import { api } from "@/lib/api"
 
 ### API 调用
 
-**无 Next.js rewrites/代理**，前端通过环境变量直接调用后端：
+**浏览器通过 Next.js API Routes (BFF) 同源请求 /api/***，无 CORS：
 ```ts
 // src/lib/api.ts
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8080/api/v1"
+const API_PREFIX = "/api"  // 浏览器端，同源
 ```
-开发时需要后端 CORS 放行 `localhost:3000`。默认连 gateway:8080。
+```ts
+// src/app/api/[...path]/route.ts  (服务端转发)
+const API_BASE = process.env.API_BASE || "http://gateway:8080/api/v1"
+```
 
-### 认证流程
+**认证流程:**
 
 **已实现完整认证**（非占位）：
 1. `login()` / `register()` — POST 到网关，获取 JWT Token

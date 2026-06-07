@@ -14,7 +14,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self'",
-              "connect-src 'self' http://localhost:* https://api.anthropic.com https://api.deepseek.com",
+              "connect-src 'self' https://api.anthropic.com https://api.deepseek.com",
               "frame-src 'none'",
               "object-src 'none'",
             ].join('; '),

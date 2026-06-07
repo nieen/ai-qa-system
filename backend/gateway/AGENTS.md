@@ -39,7 +39,8 @@ go test ./...  # 23 个测试 (config/JWT/熔断器)
 
 - **所有 handler 都是代理**: handler 方法只做参数解析 + 调用 `proxyToRAGService()` 或 `proxyToRAGServiceStream()`，不写业务逻辑
 - **流式代理**: Chat 端点用 `proxyToRAGServiceStream`，逐行转发 SSE 响应
-- **中间件注册顺序不能改**: RequestID → Logging → CORS → RateLimiter → 路由 → Authenticate/AdminRequired（路由级别）
+- **中间件注册顺序不能改**: 审计日志 → 限流 → 认证 → 黑名单 → 代理路由（RequestID → Logging → CORS → RateLimiter → 路由 → Authenticate/AdminRequired）
+- **审计日志**: 所有 POST/PUT/DELETE 操作在代理前记录 `AuditLogEntry()`，自动捕获 IP 和 User-Agent
 - **错误响应格式**:
   ```json
   {"error": "中文错误信息", "code": "ERROR_CODE"}

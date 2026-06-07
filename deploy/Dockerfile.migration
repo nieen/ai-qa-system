@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmagic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 RAG 服务依赖 (含 alembic + asyncpg)
+COPY backend/rag-service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制 RAG 服务代码（env.py 中可能通过 settings 获取 DSN）
+COPY backend/rag-service/ .
+
+# 复制全部迁移脚本
+COPY deploy/infra/migrations/ /app/deploy/infra/migrations/
+
+# 默认命令：升级到最新（可被 docker-compose command 覆盖）
+CMD ["alembic", "-c", "deploy/infra/migrations/rag/alembic.ini", "upgrade", "head"]

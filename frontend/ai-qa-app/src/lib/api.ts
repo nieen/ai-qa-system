@@ -3,20 +3,18 @@
 /**
  * API 客户端
  *
- * 与 Go API 网关通信（网关负责认证/限流/熔断，RAG 服务负责知识库能力）。
- *
- * 认证流程:
- *   1. POST /auth/login → 获取 JWT Token
- *   2. 所有后续请求带上 Authorization: Bearer <token>
- *   3. 收到 401 时清除 Token 并提示重新登录
+ * 通过 Next.js API Routes (BFF) 调用 Go API 网关。
+ * 浏览器同源请求 /api/*，Next.js 服务端转发到网关，无需 CORS。
  *
  * 后端架构:
- *   网关 (8080) → RAG 服务 (8001) → Milvus + PG + Redis
+ *   前端 /api/* → Next.js BFF → 网关 (8080) → RAG 服务 (8001) → Milvus + PG + Redis
  */
 
 import { getToken, clearToken, authHeaders } from "./auth"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8080/api/v1"
+// 所有请求走同源 /api/*，由 Next.js API Routes 转发到网关
+// 服务端直连时使用 API_BASE (server-only env)
+const API_PREFIX = "/api"
 
 // ==================== 类型定义 ====================
 
@@ -63,6 +61,27 @@ export interface RegisterResult {
     id: string
     username: string
   }
+}
+
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description?: string
+  document_count?: number
+  created_at?: string
+}
+
+export interface UserExportData {
+  user: UserProfile
+  conversations: any[]
+  documents: any[]
+  exported_at: string
+}
+
+export interface CleanupResult {
+  message: string
+  deleted_logs?: number
+  deleted_conversations?: number
 }
 
 export interface UserProfile {
@@ -121,11 +140,16 @@ export class AuthError extends Error {
   }
 }
 
+/** 统一的错误消息提取：兼容 Go 网关 {error, code} 和 RAG 服务 {detail} 两种响应格式 */
+function extractErrorMessage(body: any, fallback: string): string {
+  return body?.error || body?.detail || fallback
+}
+
 // ==================== 认证 ====================
 
 /** 用户登录 — 返回 JWT Token */
 export async function login(username: string, password: string): Promise<LoginResult> {
-  const resp = await fetch(`${API_BASE}/auth/login`, {
+  const resp = await fetch(`/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
@@ -133,7 +157,7 @@ export async function login(username: string, password: string): Promise<LoginRe
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.error || body.detail || `登录失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `登录失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -145,7 +169,7 @@ export async function register(
   password: string,
   options?: { display_name?: string; email?: string }
 ): Promise<RegisterResult> {
-  const resp = await fetch(`${API_BASE}/auth/register`, {
+  const resp = await fetch(`/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -159,7 +183,7 @@ export async function register(
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.error || `注册失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `注册失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -171,7 +195,7 @@ export async function logout(): Promise<void> {
   if (!token) return
 
   try {
-    await authFetch(`${API_BASE}/user/logout`, { method: "POST" })
+    await authFetch(`/user/logout`, { method: "POST" })
   } catch {
     // 即使登出请求失败，也清除本地 Token
   } finally {
@@ -183,7 +207,7 @@ export async function logout(): Promise<void> {
 
 /** 获取当前用户信息 */
 export async function getProfile(): Promise<UserProfile> {
-  const resp = await authFetch(`${API_BASE}/user/profile`)
+  const resp = await authFetch(`/user/profile`)
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
     throw new Error(body.error || `获取用户信息失败 (${resp.status})`)
@@ -192,15 +216,15 @@ export async function getProfile(): Promise<UserProfile> {
 }
 
 /** 导出个人数据 (PIPL §45) */
-export async function exportUserData(): Promise<any> {
-  const resp = await authFetch(`${API_BASE}/user/export`)
+export async function exportUserData(): Promise<UserExportData> {
+  const resp = await authFetch(`/user/export`)
   if (!resp.ok) throw new Error("导出失败")
   return resp.json()
 }
 
 /** 请求删除账号 (PIPL §47), 返回 request_id */
 export async function requestAccountDeletion(): Promise<string> {
-  const resp = await authFetch(`${API_BASE}/user/delete-request`, { method: "POST" })
+  const resp = await authFetch(`/user/delete-request`, { method: "POST" })
   if (!resp.ok) throw new Error("删除请求提交失败")
   const data = await resp.json()
   return data.request_id
@@ -208,7 +232,7 @@ export async function requestAccountDeletion(): Promise<string> {
 
 /** 确认删除账号 */
 export async function confirmAccountDeletion(requestId: string): Promise<void> {
-  const resp = await authFetch(`${API_BASE}/user/delete-request/${requestId}/confirm`, {
+  const resp = await authFetch(`/user/delete-request/${requestId}/confirm`, {
     method: "POST",
   })
   if (!resp.ok) throw new Error("确认删除失败")
@@ -216,7 +240,7 @@ export async function confirmAccountDeletion(requestId: string): Promise<void> {
 
 /** 取消删除请求 */
 export async function cancelAccountDeletion(requestId: string): Promise<void> {
-  const resp = await authFetch(`${API_BASE}/user/delete-request/${requestId}/cancel`, {
+  const resp = await authFetch(`/user/delete-request/${requestId}/cancel`, {
     method: "POST",
   })
   if (!resp.ok) throw new Error("取消删除失败")
@@ -225,15 +249,15 @@ export async function cancelAccountDeletion(requestId: string): Promise<void> {
 // ==================== 知识库 ====================
 
 /** 获取知识库列表 */
-export async function getKnowledgeBases(): Promise<any> {
-  const resp = await authFetch(`${API_BASE}/knowledge-bases`)
+export async function getKnowledgeBases(): Promise<KnowledgeBase[]> {
+  const resp = await authFetch(`/knowledge-bases`)
   if (!resp.ok) throw new Error("获取知识库列表失败")
   return resp.json()
 }
 
 /** 创建知识库 */
-export async function createKnowledgeBase(name: string, description?: string): Promise<any> {
-  const resp = await authFetch(`${API_BASE}/knowledge-bases`, {
+export async function createKnowledgeBase(name: string, description?: string): Promise<KnowledgeBase> {
+  const resp = await authFetch(`/knowledge-bases`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, description: description || "" }),
@@ -248,14 +272,14 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
   const formData = new FormData()
   formData.append("file", file)
 
-  const resp = await authFetch(`${API_BASE}/knowledge-bases/${kbId}/documents/upload`, {
+  const resp = await authFetch(`/knowledge-bases/${kbId}/documents/upload`, {
     method: "POST",
     body: formData,
   })
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.detail || body.error || `上传失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `上传失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -263,14 +287,14 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
 
 /** 查询文档索引状态 */
 export async function getDocumentStatus(kbId: string, docId: string): Promise<DocumentStatus> {
-  const resp = await authFetch(`${API_BASE}/knowledge-bases/${kbId}/documents/${docId}/status`)
+  const resp = await authFetch(`/knowledge-bases/${kbId}/documents/${docId}/status`)
   if (!resp.ok) throw new Error("查询文档状态失败")
   return resp.json()
 }
 
 /** 删除文档 */
 export async function deleteDocument(kbId: string, docId: string): Promise<void> {
-  await authFetch(`${API_BASE}/knowledge-bases/${kbId}/documents/${docId}`, {
+  await authFetch(`/knowledge-bases/${kbId}/documents/${docId}`, {
     method: "DELETE",
   })
 }
@@ -293,7 +317,7 @@ export async function chatStream(options: ChatOptions) {
   const { kbId, question, conversationId, history, onToken, onMetadata, onSources, onError, onDone } = options
 
   try {
-    const response = await authFetch(`${API_BASE}/knowledge-bases/${kbId}/chat`, {
+    const response = await authFetch(`/knowledge-bases/${kbId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -305,7 +329,7 @@ export async function chatStream(options: ChatOptions) {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
-      onError(body.error || body.detail || `请求失败 (${response.status})`)
+      onError(extractErrorMessage(body, `请求失败 (${response.status})`))
       return
     }
 
@@ -342,6 +366,7 @@ export async function chatStream(options: ChatOptions) {
                 onDone()
                 return
               case "error":
+              case "llm.error":
                 onError(data.content)
                 break
             }
@@ -365,14 +390,14 @@ export async function chatStream(options: ChatOptions) {
 
 /** 获取系统统计 */
 export async function getSystemStats(): Promise<SystemStats> {
-  const resp = await authFetch(`${API_BASE}/admin/stats`)
+  const resp = await authFetch(`/admin/stats`)
   if (!resp.ok) throw new Error("获取系统统计失败")
   return resp.json()
 }
 
 /** 管理员触发数据清理 */
-export async function adminCleanup(): Promise<any> {
-  const resp = await authFetch(`${API_BASE}/admin/cleanup`, { method: "POST" })
+export async function adminCleanup(): Promise<CleanupResult> {
+  const resp = await authFetch(`/admin/cleanup`, { method: "POST" })
   if (!resp.ok) throw new Error("数据清理失败")
   return resp.json()
 }

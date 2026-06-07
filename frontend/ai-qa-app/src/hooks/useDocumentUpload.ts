@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { uploadDocument, getDocumentStatus, type DocumentUploadResult, type DocumentStatus } from "@/lib/api"
 
 /** 上传文档后轮询索引状态的最大次数（每次 2 秒，共 60 秒） */
@@ -18,10 +18,22 @@ export interface UploadState {
 export function useDocumentUpload(kbId: string) {
   const [uploadState, setUploadState] = useState<UploadState>({ status: "idle" })
   const [isUploading, setIsUploading] = useState(false)
+  const mountedRef = useRef(true)
+
+  // 组件卸载时停止轮询
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const pollStatus = useCallback(
     async (docId: string): Promise<DocumentStatus> => {
       for (let i = 0; i < MAX_POLL_RETRIES; i++) {
+        // 组件已卸载时提前退出轮询
+        if (!mountedRef.current) {
+          return { id: docId, status: "failed", message: "组件已卸载" }
+        }
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
         try {
           const status = await getDocumentStatus(kbId, docId)

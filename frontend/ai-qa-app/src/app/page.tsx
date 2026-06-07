@@ -146,7 +146,11 @@ export default function Home() {
   }
 
   const handleLogout = async () => {
-    await apiLogout()
+    try {
+      await apiLogout()
+    } catch {
+      // 即使登出 API 调用失败，也清除本地状态
+    }
     setUser(null)
     clearToken()
   }

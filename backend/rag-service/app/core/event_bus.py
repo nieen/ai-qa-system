@@ -190,6 +190,24 @@ class EventBus:
                         await self.ack(stream, group, msg_id)
         return messages
 
+    async def get_pending_count(self, stream: str, group: str) -> int:
+        """获取消费者组中待处理（Pending）的消息总数
+
+        Args:
+            stream: Stream 名称
+            group: 消费者组名称
+        Returns:
+            待处理消息数，失败时返回 0
+        """
+        if not self._redis:
+            return 0
+        try:
+            pending = await self._redis.xpending(stream, group)
+            return pending.get("pending", 0) if pending else 0
+        except Exception as e:
+            logger.debug(f"获取待处理消息数失败: {e}")
+            return 0
+
     # ==================== ACK / 重试 ====================
 
     async def ack(self, stream: str, group: str, msg_id: str) -> None:

@@ -26,6 +26,9 @@ export function useChat(kbId: string) {
   const [sources, setSources] = useState<any[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // 用 ref 持有最新 messages，避免 send 函数因 messages 变更而重建
+  const messagesRef = useRef<Message[]>([])
+  messagesRef.current = messages
 
   // 自动滚动到最新消息
   useEffect(() => {
@@ -52,7 +55,8 @@ export function useChat(kbId: string) {
       { id: assistantMessageId, role: "assistant", content: "", timestamp: new Date() },
     ])
 
-    const history = messages.map((m) => ({
+    // 通过 ref 获取最新 messages，避免依赖数组引用状态变量
+    const history = messagesRef.current.map((m) => ({
       role: m.role,
       content: m.content,
     }))
@@ -93,7 +97,7 @@ export function useChat(kbId: string) {
     } catch {
       setIsLoading(false)
     }
-  }, [kbId, isLoading, conversationId, messages])
+  }, [kbId, isLoading, conversationId]) // messages 通过 ref 获取，不在依赖数组中
 
   const clear = useCallback(() => {
     setMessages([])

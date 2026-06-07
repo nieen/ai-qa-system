@@ -100,7 +100,7 @@ services:
     environment:
       POSTGRES_USER: aiqa
       POSTGRES_PASSWORD: aiqa_secure_pass_2026
-      POSTGRES_DB: aiqa
+      POSTGRES_DB: postgres  # 临时代理库，aiqa_gateway / aiqa_rag 由 init.sql 创建
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
@@ -160,6 +160,43 @@ services:
       retries: 3
 
   # ============================================================
+  # 5. 数据库迁移 (RAG 服务 schema)
+  #    在 rag-service 启动前运行，确保 schema 处于最新版本
+  # ============================================================
+  rag-migration:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile.migration
+    image: aiqa-rag-migration:latest
+    restart: "no"
+    environment:
+      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa_rag"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ai-qa-net
+
+  # ============================================================
+  # 5a. 数据库迁移 (网关 schema — 使用 golang-migrate)
+  #     在 gateway 启动前运行
+  # ============================================================
+  gateway-migration:
+    image: migrate/migrate:v4.18.1
+    restart: "no"
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa_gateway?sslmode=disable"
+      - "up"
+    volumes:
+      - ./migrations/gateway:/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ai-qa-net
+
+  # ============================================================
   # 6. RAG 服务 (FastAPI)
   #    docker compose up -d --scale rag-service=2  # 启动 2 副本
   # ============================================================
@@ -174,7 +211,7 @@ services:
     environment:
       APP_PORT: "8001"
       REDIS_URL: "redis://:aiqa_redis_pass_2026@redis:6379/0"
-      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa"
+      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa_rag"
       MILVUS_HOST: "milvus"
       MINIO_ENDPOINT: "minio:9000"
       LLM_BASE_URL: "http://vllm:8000/v1"
@@ -187,6 +224,8 @@ services:
         condition: service_healthy
       milvus:
         condition: service_started
+      rag-migration:
+        condition: service_completed_successfully
     networks:
       - ai-qa-net
     healthcheck:
@@ -210,7 +249,7 @@ services:
     command: python -m workers.document_worker worker-1
     environment:
       REDIS_URL: "redis://:aiqa_redis_pass_2026@redis:6379/0"
-      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa"
+      POSTGRES_DSN: "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@postgres:5432/aiqa_rag"
       MILVUS_HOST: "milvus"
       MINIO_ENDPOINT: "minio:9000"
       APP_LOG_LEVEL: "${APP_LOG_LEVEL:-info}"
@@ -219,6 +258,14 @@ services:
         condition: service_healthy
     networks:
       - ai-qa-net
+    healthcheck:
+      test: ["CMD", "python", "-m", "workers.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "9101"  # Prometheus 指标 (注意 swarm 模式下随机映射，需配合标签抓取)
     deploy:
       replicas: 2  # 默认 2 个 Worker 副本
 
@@ -242,6 +289,8 @@ services:
     depends_on:
       rag-service:
         condition: service_started
+      gateway-migration:
+        condition: service_completed_successfully
     networks:
       - ai-qa-net
     healthcheck:
@@ -284,29 +333,3 @@ services:
   #             capabilities: [gpu]
   # 实际部署时取消注释并配置路径
   # ============================================================
-  # vllm:
-  #   image: vllm/vllm-openai:latest
-  #   container_name: aiqa-vllm
-  #   restart: always
-  #   ports:
-  #     - "8000:8000"
-  #   volumes:
-  #     - /path/to/models:/models
-  #   networks:
-  #     - ai-qa-net
-  #   command: >
-  #     --model /models/DeepSeek-R1-Distill-Qwen-32B
-  #     --port 8000
-  #     --max-model-len 32768
-  #     --gpu-memory-utilization 0.9
-  #     --tensor-parallel-size 2
-  #     --dtype bfloat16
-  #     --served-model-name deepseek-r1
-  #     --enable-auto-tool-choice
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]

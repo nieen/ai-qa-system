@@ -40,38 +40,70 @@
 ### 5 层架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    用户交互层 (Frontend)                       │
-│         Next.js 16 Web App + 企业微信/飞书 Bot               │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP/WebSocket / SSE
-┌──────────────────────▼──────────────────────────────────────┐
-│                    API 网关层 (Go + Gin)                      │
-│  认证鉴权 (JWT) | 限流熔断 | 请求路由 | 审计日志 | 缓存       │
-└──────┬──────────────┬──────────────┬────────────────────────┘
-       │              │              │
-┌──────▼──────┐ ┌─────▼──────┐ ┌───▼────────────┐
-│  问答服务    │ │  知识管理   │ │  文档处理       │
-│  (Python)   │ │  (Go)      │ │  (Python)      │
-└──────┬──────┘ └─────┬──────┘ └───┬────────────┘
-       │              │              │
-┌──────▼──────────────▼──────────────▼────────────────────────┐
-│                     AI 引擎层                                 │
-│  ┌────────────────┐ ┌──────────────┐ ┌───────────────────┐      │
-│  │  LLM API        │ │ Embedding    │ │ Reranker          │      │
-│  │  (DeepSeek/     │ │ (BGE-M3)     │ │ (BGE-Reranker)    │      │
-│  │   Claude/       │ │              │ │                   │      │
-│  │   OpenAI)       │ │              │ │                   │      │
-│  └────────────────┘ └──────────────┘ └───────────────────┘      │
-└──────┬──────────────────────┬───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                   用户交互层 (Frontend)                               │
+│       Next.js 16 Web App + 企业微信/飞书 Bot                        │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ 同源 /api/*  (无 CORS)
+┌────────────────────▼────────────────────────────────────────────────┐
+│                 BFF 层 (Next.js API Routes)                          │
+│  请求转发 | JWT 透传 | SSE 流代理 | 未来可做响应聚合/转换            │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ HTTP (服务端直连)
+┌────────────────────▼────────────────────────────────────────────────┐
+│                API 网关层 (Go + Gin)                                  │
+│  ┌───────────────────────────────┐  ┌────────────────────────────┐  │
+│  │  直连 PostgreSQL (aiqa_gateway)│  │  代理到 RAG 服务           │  │
+│  │  · 认证 (Login/Register/JWT)  │  │  · 知识库 CRUD             │  │
+│  │  · 用户管理 / 角色管理         │  │  · 文档管理 / 上传         │  │
+│  │  · 审计日志                   │  │  · 问答 / 对话             │  │
+│  │  · PIPL 合规                  │  │  · 流式 SSE 输出           │  │
+│  └───────────────────────────────┘  └────────────────────────────┘  │
+│  限流熔断 | JWT 鉴权 | 请求路由 | RequestID 链路追踪                  │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────────────┐
+│                    RAG 服务层 (Python + FastAPI)                      │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────────────┐  │
+│  │  问答编排       │  │  文档处理       │  │  后台 Worker           │  │
+│  │  · 查询预处理   │  │  · 文档解析     │  │  · 文档索引 (MQ 消费)  │  │
+│  │  · 混合检索     │  │  · 文本清洗     │  │  · /metrics :9101     │  │
+│  │  · RRF 融合     │  │  · 分块        │  │  · healthcheck (Redis) │  │
+│  │  · 精排重排序   │  │  · 元数据提取   │  │                       │  │
+│  │  · 上下文组装   │  │  · MinIO 持久化 │  │                       │  │
+│  │  · LLM 生成     │  │                │  │                       │  │
+│  └────────────────┘  └────────────────┘  └────────────────────────┘  │
+└──────┬──────────────────────┬───────────────────────────────────────┘
        │                      │
-┌──────▼──────────────────────▼───────────────────────────────┐
-│                     数据存储层                                │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐     │
-│  │ Milvus   │ │PostgreSQL│ │ Redis    │ │ MinIO      │     │
-│  │(向量库)  │ │(元数据)  │ │(缓存)   │ │(文档存储)  │     │
-│  └──────────┘ └──────────┘ └──────────┘ └────────────┘     │
-└─────────────────────────────────────────────────────────────┘
+┌──────▼──────────────────────▼───────────────────────────────────────┐
+│                     AI 引擎层                                         │
+│  ┌────────────────┐ ┌──────────────┐ ┌───────────────────┐          │
+│  │  LLM API       │ │ Embedding    │ │ Reranker          │          │
+│  │  (DeepSeek/    │ │ (BGE-M3)     │ │ (BGE-Reranker)    │          │
+│  │   Claude/      │ │              │ │                   │          │
+│  │   OpenAI)      │ │              │ │                   │          │
+│  └────────────────┘ └──────────────┘ └───────────────────┘          │
+└──────┬──────────────────────┬───────────────────────────────────────┘
+       │                      │
+┌──────▼──────────────────────▼───────────────────────────────────────┐
+│                      数据存储层                                       │
+│  ┌──────────┐ ┌──────────────┐ ┌──────────┐ ┌────────────┐          │
+│  │ Milvus   │ │  PostgreSQL  │ │ Redis    │ │ MinIO      │          │
+│  │(向量库)  │ │ ┌──────────┐ │ │(限流/    │ │(文档存储)   │          │
+│  │          │ │ │aiqa_gw  │ │ │ Streams) │ │            │          │
+│  │          │ │ │(网关:   │ │ │          │ │            │          │
+│  │          │ │ │ users/  │ │ │          │ │            │          │
+│  │          │ │ │ audit/  │ │ │          │ │            │          │
+│  │          │ │ │ pipi)   │ │ │          │ │            │          │
+│  │          │ │ ├──────────┤ │ │          │ │            │          │
+│  │          │ │ │aiqa_rag │ │ │          │ │            │          │
+│  │          │ │ │(RAG: kb/│ │ │          │ │            │          │
+│  │          │ │ │ docs/   │ │ │          │ │            │          │
+│  │          │ │ │ conv/)  │ │ │          │ │            │          │
+│  │          │ │ └──────────┘ │ │          │ │            │          │
+│  │          │ └──────────────┘ │          │ └────────────┘          │
+│  └──────────┘                  └──────────┘                         │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 技术栈一览
@@ -86,12 +118,14 @@
 | **向量库** | 向量数据库 | [Milvus v2.5.4](https://milvus.io/) | 企业级分布式，原生 hybrid_search |
 | **文档处理** | 文档解析 | [unstructured.io](https://unstructured.io/) + Marker | PDF/Word/HTML 解析 |
 | | 分块 | 混合策略 (标题分割 + tiktoken 固定窗口) | CHUNK_SIZE=512, OVERLAP=64 |
-| **后端** | API 网关 | Go + [Gin](https://gin-gonic.com/) | 高并发，低延迟 |
-| | RAG 编排 | Python + [FastAPI](https://fastapi.tiangolo.com/) | Python AI 生态 |
+| **后端** | API 网关 | Go + [Gin](https://gin-gonic.com/) | 4 层架构 (handler/service/repository/proxy)，含熔断重试 |
+| | RAG 编排 | Python + [FastAPI](https://fastapi.tiangolo.com/) | 问答编排 + 文档处理 + Worker 后台消费 |
+| | BFF 层 | [Next.js API Routes](https://nextjs.org/docs/app/building-your-application/routing/route-handlers) | 同源 /api/* 转发，无 CORS |
 | **前端** | Web 界面 | [Next.js 16](https://nextjs.org/) | SSR, 流式输出, Tailwind, React 19 |
-| **存储** | 元数据 | PostgreSQL 16 | 用户/知识库/对话 |
-| | 缓存 | Redis 7 | 会话/限流 |
-| | 对象存储 | MinIO | 原始文档，S3 兼容 |
+| **存储** | PostgreSQL 16 | 双库隔离 | `aiqa_gateway` (网关) + `aiqa_rag` (RAG) |
+| | 数据库迁移 | Alembic (RAG) + golang-migrate (网关) | 版本管理 |
+| | Redis 7 | 会话/限流/Streams | 缓存层 |
+| | MinIO | 原始文档持久化 | storage client 集成 |
 
 ---
 
@@ -544,20 +578,77 @@ LLM 全部通过 API 接入，**不消耗本地 GPU 资源**。GPU 仅用于嵌�
 
 ### 数据库 Schema (PostgreSQL)
 
-详见 `deploy/infra/postgres-init.sql`，核心表：
+详见 `deploy/infra/postgres-init.sql`，核心表及**数据归属**：
 
-| 表 | 说明 | 关键字段 |
-|----|------|---------|
-| `organizations` | 组织/企业 | id, name |
-| `users` | 用户 | id, username, role (admin/editor/user/viewer) |
-| `knowledge_bases` | 知识库 | id, name, embedding_model, chunk_size, access_level |
-| `documents` | 文档 | id, kb_id, title, file_type, status, checksum |
-| `document_chunks` | 文本块元数据 | id, doc_id, chunk_index, content, milvus_id |
-| `conversations` | 对话 | id, user_id, kb_id, message_count |
-| `messages` | 消息 | id, conv_id, role, content, sources, feedback_score |
-| `audit_logs` | 审计日志 | id, user_id, action, resource_type, details |
+| 表 | 归属 | 说明 | 关键字段 |
+|----|------|------|---------|
+| **users** | **网关** (Go) | 认证、用户管理、角色 | `id, username, password_hash, role, is_active` |
+| **audit_logs** | **网关** (Go) | 审计日志（写操作自动记录） | `id, user_id, action, resource_type, details, ip_address` |
+| **user_consents** | **网关** (Go) | PIPL 同意记录 | `id, user_id, consent_type, consent_version, granted_at` |
+| **deletion_requests** | **网关** (Go) | PIPL 删除请求（7 天冷静期） | `id, user_id, status, expires_at` |
+| **knowledge_bases** | **RAG** (Python) | 知识库元数据 | `id, name, owner_id, embedding_model, chunk_size` |
+| **documents** | **RAG** (Python) | 文档元数据，MinIO 存储原文 | `id, knowledge_base_id, title, file_type, status, checksum` |
+| **document_chunks** | **RAG** (Python) | 文档块元数据 | `id, document_id, chunk_index, content, milvus_id` |
+| **conversations** | **RAG** (Python) | 对话历史 | `id, user_id, knowledge_base_id, title, message_count` |
+| **messages** | **RAG** (Python) | 对话消息 | `id, conversation_id, role, content, sources` |
+| organizations | 预留 | 组织（目前未使用） | |
 
-### 知识库层级
+> **⚠️ 数据访问边界**:
+> - 网关仅连接 `aiqa_gateway` 数据库，**只应读写** `users`、`audit_logs`、`user_consents`、`deletion_requests`
+> - RAG 服务仅连接 `aiqa_rag` 数据库，**只应读写** `knowledge_bases`、`documents`、`document_chunks`、`conversations`、`messages`
+> - 网关需要知识库/文档等统计信息时，**通过 RAG API 代理获取**（`/admin/stats`），而非直接读表
+> - RAG 服务需要用户信息时，通过网关 API 的 `X-User-ID` / `X-User-Role` 请求头透传，不直读 `users` 表
+> - RAG 表不再设跨库外键（`owner_id`、`created_by`、`user_id` 列为普通 VARCHAR），业务完整性由 API 保证
+> - 两个库可在同一 PostgreSQL 实例（不同 database name），也可各自独立实例
+> - Schema 归各自服务所有，演化时由对应服务管理 migration
+
+### 数据库版本管理
+
+**RAG 服务 (`aiqa_rag`)** 使用 **Alembic** (Python) 管理：
+
+```
+deploy/infra/migrations/rag/
+├── alembic.ini
+├── env.py
+└── versions/
+    └── 2026_01_01_baseline.py
+```
+
+```bash
+alembic -c deploy/infra/migrations/rag/alembic.ini upgrade head
+```
+
+**网关 (`aiqa_gateway`)** 使用 **golang-migrate** (Go 生态) 管理：
+
+```
+deploy/infra/migrations/gateway/
+├── 000001_initial.up.sql
+└── 000001_initial.down.sql
+```
+
+```bash
+# 本地安装 golang-migrate CLI 后:
+migrate -path deploy/infra/migrations/gateway \
+        -database "postgres://aiqa:aiqa_secure_pass_2026@localhost:5432/aiqa_gateway?sslmode=disable" \
+        up
+```
+
+**Docker 部署:**
+- `rag-migration` 容器使用自定义镜像运行 Alembic，依赖于 Python 运行时
+- `gateway-migration` 容器使用官方 `migrate/migrate:v4.18.1` 镜像，无需任何语言运行时
+- 两个容器均使用 `condition: service_completed_successfully` 确保迁移成功后再启动对应服务
+
+**新增迁移:**
+```bash
+# RAG (Alembic)
+alembic -c deploy/infra/migrations/rag/alembic.ini revision -m "add_column_x"
+
+# 网关 (golang-migrate) — 手动创建 .up.sql / .down.sql 文件
+# 命名格式: {版本号}_{描述}.up.sql / {版本号}_{描述}.down.sql
+touch deploy/infra/migrations/gateway/000002_add_user_preferences.up.sql
+touch deploy/infra/migrations/gateway/000002_add_user_preferences.down.sql
+```
+
 
 ```
 Knowledge Base (知识库)

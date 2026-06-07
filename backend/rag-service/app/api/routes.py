@@ -21,9 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.container import get_vector_store, get_pipeline, get_llm_router
+from app.core.container import get_vector_store, get_pipeline, get_llm_router, get_storage
 from app.core.database import get_db
 from app.core.event_bus import event_bus, STREAM_DOC_INGESTION, GROUP_DOC_WORKERS
+from app.core.storage import storage_client
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,10 @@ async def upload_document(
 
     doc_id = str(uuid.uuid4())
 
+    # 上传到 MinIO
+    object_name = f"{kb_id}/{doc_id}/{file.filename}"
+    await storage_client.upload_from_bytes(settings.MINIO_BUCKET, object_name, content)
+
     # 发布任务到 Redis Stream
     msg_id = await event_bus.publish(
         STREAM_DOC_INGESTION,
@@ -187,6 +192,7 @@ async def upload_document(
             "file_path": tmp_path,
             "file_type": file_type,
             "file_name": file.filename,
+            "minio_object": object_name,
         },
     )
 
@@ -362,3 +368,152 @@ async def reset_llm():
 async def get_audit_logs():
     """管理员 - 审计日志"""
     return {"data": [], "total": 0}
+
+
+@router.get(
+    "/admin/stats",
+    summary="知识库统计",
+    description="返回知识库和文档的统计数据（由 RAG 服务读取自身所辖表）",
+    tags=["管理"],
+)
+async def get_kb_stats():
+    """管理员 - 知识库统计"""
+    from app.core.database import get_db
+    from sqlalchemy import text as sql_text
+
+    try:
+        async for session in get_db():
+            result = await session.execute(sql_text("""
+                SELECT
+                    (SELECT COUNT(*) FROM knowledge_bases) AS total_kbs,
+                    (SELECT COUNT(*) FROM documents) AS total_documents,
+                    (SELECT COALESCE(SUM(chunk_count), 0) FROM documents) AS total_chunks
+            """))
+            row = result.one()
+            return {
+                "total_kbs": row.total_kbs,
+                "total_documents": row.total_documents,
+                "total_chunks": row.total_chunks,
+            }
+    except Exception as e:
+        logger.error(f"获取知识库统计失败: {e}")
+        return {"total_kbs": 0, "total_documents": 0, "total_chunks": 0}
+
+
+# ==================== 用户数据管理（供网关调用，操作 RAG 所属表）===================
+
+@router.get(
+    "/admin/users/{user_id}/export",
+    summary="导出用户数据（RAG 所属部分）",
+    description="返回该用户在 RAG 服务中的对话、消息和文档数据。由网关在用户行使数据可携带权（PIPL §45）时调用",
+    tags=["管理"],
+)
+async def export_user_rag_data(user_id: str):
+    """导出用户在 RAG 所辖表中的数据：对话 + 消息 + 文档"""
+    from app.core.database import get_db
+    from sqlalchemy import text as sql_text
+
+    try:
+        async for session in get_db():
+            # 1. 查询对话
+            conv_result = await session.execute(sql_text("""
+                SELECT id, title, created_at
+                FROM conversations
+                WHERE user_id = :uid
+                ORDER BY created_at DESC
+            """), {"uid": user_id})
+            conversations = []
+            for row in conv_result.fetchall():
+                conv = {
+                    "id": row[0],
+                    "title": row[1],
+                    "created_at": row[2].isoformat() if hasattr(row[2], 'isoformat') else str(row[2]),
+                    "messages": [],
+                }
+                # 查询该对话的消息
+                msg_result = await session.execute(sql_text("""
+                    SELECT id, role, content, created_at
+                    FROM messages
+                    WHERE conversation_id = :cid
+                    ORDER BY created_at
+                """), {"cid": row[0]})
+                for msg in msg_result.fetchall():
+                    conv["messages"].append({
+                        "id": msg[0],
+                        "role": msg[1],
+                        "content": msg[2],
+                        "created_at": msg[3].isoformat() if hasattr(msg[3], 'isoformat') else str(msg[3]),
+                    })
+                conversations.append(conv)
+
+            # 2. 查询文档
+            doc_result = await session.execute(sql_text("""
+                SELECT d.id, d.title, d.file_type,
+                       COALESCE(kb.name, '未知知识库') AS kb_name,
+                       d.created_at
+                FROM documents d
+                LEFT JOIN knowledge_bases kb ON kb.id = d.knowledge_base_id
+                WHERE d.created_by = :uid
+                ORDER BY d.created_at DESC
+            """), {"uid": user_id})
+            documents = [
+                {
+                    "id": row[0],
+                    "title": row[1],
+                    "file_type": row[2],
+                    "kb_name": row[3],
+                    "created_at": row[4].isoformat() if hasattr(row[4], 'isoformat') else str(row[4]),
+                }
+                for row in doc_result.fetchall()
+            ]
+
+            return {
+                "conversations": conversations,
+                "documents": documents,
+            }
+    except Exception as e:
+        logger.error(f"导出用户 RAG 数据失败 (user_id={user_id}): {e}", exc_info=True)
+        return {"conversations": [], "documents": []}
+
+
+@router.delete(
+    "/admin/users/{user_id}/data",
+    summary="删除用户数据（RAG 所属部分）",
+    description="级联删除该用户在 RAG 服务中的对话、消息，并移除文档的创建人关联。由网关确认用户删除时调用",
+    tags=["管理"],
+)
+async def delete_user_rag_data(user_id: str):
+    """删除用户在 RAG 所辖表中的所有数据（消息→对话→文档关联解除）"""
+    from app.core.database import get_db
+    from sqlalchemy import text as sql_text
+
+    try:
+        async for session in get_db():
+            async with session.begin():
+                # 1. 删除该用户所有对话中的消息
+                await session.execute(sql_text("""
+                    DELETE FROM messages WHERE conversation_id IN
+                    (SELECT id FROM conversations WHERE user_id = :uid)
+                """), {"uid": user_id})
+                # 2. 删除该用户的对话
+                await session.execute(sql_text("""
+                    DELETE FROM conversations WHERE user_id = :uid
+                """), {"uid": user_id})
+                # 3. 解除文档的创建人关联（逻辑删除，保留知识库结构）
+                await session.execute(sql_text("""
+                    UPDATE documents SET
+                        title = '[已删除]',
+                        file_path = NULL,
+                        created_by = NULL
+                    WHERE created_by = :uid
+                """), {"uid": user_id})
+
+            logger.info(f"用户 RAG 数据已删除 (user_id={user_id})")
+            return {"message": "RAG 用户数据已删除", "deleted": True}
+
+    except Exception as e:
+        logger.error(f"删除用户 RAG 数据失败 (user_id={user_id}): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "删除用户数据失败", "code": "DELETE_USER_DATA_FAILED"},
+        )
