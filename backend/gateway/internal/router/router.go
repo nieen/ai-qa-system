@@ -7,15 +7,33 @@ import (
 	"github.com/ai-qa-system/gateway/internal/config"
 	"github.com/ai-qa-system/gateway/internal/handler"
 	"github.com/ai-qa-system/gateway/internal/middleware"
+	"github.com/ai-qa-system/gateway/internal/proxy"
+	"github.com/ai-qa-system/gateway/internal/repository"
+	"github.com/ai-qa-system/gateway/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 // RegisterRoutes 注册所有 API 路由
+// 负责组装依赖（Repository → Service → Proxy → Handler）并注册路由
 func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger) *handler.Handler {
-	// 初始化 handler
-	h := handler.NewHandler(cfg, logger)
+	// ---- 仓储层 ----
+	userRepo := repository.NewUserRepository()
+	auditRepo := repository.NewAuditRepository()
+	statsRepo := repository.NewStatsRepository()
+	piplRepo := repository.NewPIPLRepository()
+
+	// ---- 服务层 ----
+	authSvc := service.NewAuthService(cfg, userRepo, auditRepo)
+	userSvc := service.NewUserService(userRepo, auditRepo, piplRepo)
+	adminSvc := service.NewAdminService(userRepo, auditRepo, statsRepo, piplRepo)
+
+	// ---- 代理层 ----
+	ragProxy := proxy.NewRAGProxyClient(cfg, logger)
+
+	// ---- 处理层 ----
+	h := handler.NewHandler(authSvc, userSvc, adminSvc, ragProxy, logger)
 
 	auth := middleware.Authenticate(cfg.JWT.Secret)
 	admin := middleware.AdminRequired()
@@ -37,13 +55,13 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		// 用户管理
 		protected.GET("/user/profile", h.GetProfile)
 		protected.PUT("/user/profile", h.UpdateProfile)
-		protected.POST("/user/logout", h.Logout) // 登出 (Token 吊销)
+		protected.POST("/user/logout", h.Logout)
 
 		// 数据合规 (PIPL)
-		protected.GET("/user/export", h.ExportData)                                  // 数据可携带权
-		protected.POST("/user/delete-request", h.RequestDeletion)                    // 删除权申请
-		protected.POST("/user/delete-request/:requestId/confirm", h.ConfirmDeletion) // 确认删除
-		protected.POST("/user/delete-request/:requestId/cancel", h.CancelDeletion)   // 取消删除
+		protected.GET("/user/export", h.ExportData)
+		protected.POST("/user/delete-request", h.RequestDeletion)
+		protected.POST("/user/delete-request/:requestId/confirm", h.ConfirmDeletion)
+		protected.POST("/user/delete-request/:requestId/cancel", h.CancelDeletion)
 
 		// 知识库
 		protected.GET("/knowledge-bases", h.ListKnowledgeBases)
@@ -72,10 +90,10 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		protected.GET("/admin/users", admin, h.ListUsers)
 		protected.PUT("/admin/users/:userId", admin, h.UpdateUserRole)
 		protected.GET("/admin/audit-logs", admin, h.GetAuditLogs)
-		protected.POST("/admin/cleanup", admin, h.AdminCleanup) // 数据保留策略清理
+		protected.POST("/admin/cleanup", admin, h.AdminCleanup)
 	}
 
-	// ---- RAG 服务内部路由 (服务间调用，使用内部认证) ----
+	// ---- RAG 服务内部路由 (服务间调用) ----
 	internal := r.Group("/internal/api/v1")
 	{
 		internal.GET("/health", h.InternalHealth)
