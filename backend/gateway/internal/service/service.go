@@ -1,5 +1,7 @@
 package service
 
+import "net/http"
+
 // LoginResult 登录结果
 type LoginResult struct {
 	Token string
@@ -48,6 +50,8 @@ type UserService interface {
 	RequestDeletion(userID string) (string, error)
 	ConfirmDeletion(requestID, userID string) error
 	CancelDeletion(requestID, userID string) error
+	// SetRAGAPI 设置 RAG API 基础 URL（用于级联删除 RAG 所属数据）
+	SetRAGAPI(baseURL string, client *http.Client)
 }
 
 // AuditLogDTO 审计日志 DTO
@@ -70,7 +74,7 @@ type CleanupResult struct {
 
 // AdminService 管理服务接口
 type AdminService interface {
-	GetSystemStats() (interface{}, error)
+	GetUserCount() (int, error)
 	ListUsers(adminID string) (interface{}, error)
 	UpdateUserRole(adminID, userID, role, clientIP, userAgent string) error
 	GetAuditLogs(limit, offset int) ([]AuditLogDTO, int, error)

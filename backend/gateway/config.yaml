@@ -13,7 +13,7 @@ log:
   output: "stdout"
 
 database:
-  dsn: "postgres://aiqa:aiqa_secure_pass_2026@localhost:5432/aiqa?sslmode=disable"
+  dsn: "postgres://aiqa:aiqa_secure_pass_2026@localhost:5432/aiqa_gateway?sslmode=disable"
   max_open_conns: 50
   max_idle_conns: 20
   conn_max_lifetime: 30m

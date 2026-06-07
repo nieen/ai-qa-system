@@ -50,6 +50,16 @@ func (p *RAGProxyClient) buildURL(path string) string {
 	return p.baseURL + path
 }
 
+// RAGAPIBaseURL 返回 RAG 服务 API 基础 URL（供 handler 层直接调用时使用）
+func (p *RAGProxyClient) RAGAPIBaseURL() string {
+	return p.baseURL
+}
+
+// HTTPClient 返回共享的 HTTP 客户端（复用连接池，避免 handler 层重复创建）
+func (p *RAGProxyClient) HTTPClient() *http.Client {
+	return p.client
+}
+
 // getCircuitBreaker 获取或创建熔断器
 func (p *RAGProxyClient) getCircuitBreaker() *DistributedCircuitBreaker {
 	cbCfg := p.cfg.Services.RAGService.CircuitBreaker

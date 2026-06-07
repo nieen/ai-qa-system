@@ -32,6 +32,9 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 	// ---- 代理层 ----
 	ragProxy := proxy.NewRAGProxyClient(cfg, logger)
 
+	// 将 RAG API 能力注入服务层（用于级联删除 RAG 所属数据等跨服务操作）
+	userSvc.SetRAGAPI(ragProxy.RAGAPIBaseURL(), ragProxy.HTTPClient())
+
 	// ---- 处理层 ----
 	h := handler.NewHandler(authSvc, userSvc, adminSvc, ragProxy, logger)
 

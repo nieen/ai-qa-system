@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     APP_SECRET_KEY: str = "change-this-to-a-random-secret-key"
 
     # --- 数据库 (PostgreSQL) ---
-    POSTGRES_DSN: str = "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@localhost:5432/aiqa"
+    POSTGRES_DSN: str = "postgresql+asyncpg://aiqa:aiqa_secure_pass_2026@localhost:5432/aiqa_rag"
 
     # --- Redis 缓存 ---
     REDIS_ENABLED: bool = True

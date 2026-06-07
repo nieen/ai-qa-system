@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/ai-qa-system/gateway/internal/service"
 	"github.com/gin-gonic/gin"
@@ -44,6 +47,7 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 }
 
 // ExportData 导出用户个人数据 (PIPL §45 数据可携带权)
+// 数据来源：用户资料由网关负责，对话/文档等通过 RAG API 获取
 // @Summary     导出个人数据
 // @Description 导出当前用户的所有个人数据（资料、对话、文档）
 // @Tags        数据合规
@@ -55,13 +59,48 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 func (h *Handler) ExportData(c *gin.Context) {
 	userID := c.GetString(ctxKeyUserID)
 
-	data, err := h.userSvc.ExportData(userID)
+	// 1. 用户资料（网关自有表）
+	profile, err := h.userSvc.GetProfile(userID)
 	if err != nil {
-		c.JSON(503, gin.H{"error": "数据服务暂不可用", "code": "SERVICE_UNAVAILABLE"})
-		return
+		profile = nil
 	}
 
-	c.JSON(200, data)
+	// 2. 对话/文档（RAG 所属表 → API 代理）
+	ragData := h.fetchRAGUserData(userID)
+
+	c.JSON(200, gin.H{
+		"exported_at":   time.Now().UTC().Format(time.RFC3339),
+		"user":          profile,
+		"conversations": ragData["conversations"],
+		"documents":     ragData["documents"],
+	})
+}
+
+// fetchRAGUserData 通过 RAG API 获取用户关联数据
+func (h *Handler) fetchRAGUserData(userID string) map[string]interface{} {
+	result := map[string]interface{}{
+		"conversations": []interface{}{},
+		"documents":     []interface{}{},
+	}
+
+	exportURL := h.ragProxy.RAGAPIBaseURL() + "/admin/users/" + userID + "/export"
+	resp, err := h.ragProxy.HTTPClient().Get(exportURL)
+	if err != nil {
+		h.logger.Warnw("RAG 用户数据导出不可用", "user_id", userID, "error", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var ragResp struct {
+		Conversations []interface{} `json:"conversations"`
+		Documents     []interface{} `json:"documents"`
+	}
+	if json.Unmarshal(body, &ragResp) == nil {
+		result["conversations"] = ragResp.Conversations
+		result["documents"] = ragResp.Documents
+	}
+	return result
 }
 
 // Logout 用户登出 (Token 吊销)
@@ -117,6 +156,7 @@ func (h *Handler) ConfirmDeletion(c *gin.Context) {
 	userID := c.GetString(ctxKeyUserID)
 	requestID := c.Param("requestId")
 
+	// Service 内部会先调 RAG API 清理 RAG 所属表，再级联删除网关本地数据
 	if err := h.userSvc.ConfirmDeletion(requestID, userID); err != nil {
 		h.logger.Errorw("确认删除失败", "request_id", requestID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -129,8 +169,9 @@ func (h *Handler) ConfirmDeletion(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "账户及所有关联数据已删除"})
 }
 
+
+
 // CancelDeletion 取消删除账户
-// @Summary     取消删除账户
 // @Description 在确认删除前取消删除申请
 // @Tags        数据合规
 // @Produce     json

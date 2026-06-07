@@ -28,19 +28,13 @@ func NewAdminService(
 	}
 }
 
-func (s *adminService) GetSystemStats() (interface{}, error) {
+func (s *adminService) GetUserCount() (int, error) {
 	stats, err := s.statsRepo.GetSystemStats()
 	if err != nil {
-		s.logger.Errorw("获取系统统计失败", "error", err)
-		return nil, ErrServiceUnavailable
+		s.logger.Errorw("获取用户统计失败", "error", err)
+		return 0, ErrServiceUnavailable
 	}
-
-	return map[string]interface{}{
-		"total_kbs":       stats.TotalKBs,
-		"total_documents": stats.TotalDocuments,
-		"total_chunks":    stats.TotalChunks,
-		"total_users":     stats.TotalUsers,
-	}, nil
+	return stats.TotalUsers, nil
 }
 
 func (s *adminService) ListUsers(adminID string) (interface{}, error) {
