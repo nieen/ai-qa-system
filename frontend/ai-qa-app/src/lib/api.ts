@@ -65,6 +65,27 @@ export interface RegisterResult {
   }
 }
 
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description?: string
+  document_count?: number
+  created_at?: string
+}
+
+export interface UserExportData {
+  user: UserProfile
+  conversations: any[]
+  documents: any[]
+  exported_at: string
+}
+
+export interface CleanupResult {
+  message: string
+  deleted_logs?: number
+  deleted_conversations?: number
+}
+
 export interface UserProfile {
   id: string
   username: string
@@ -121,6 +142,11 @@ export class AuthError extends Error {
   }
 }
 
+/** 统一的错误消息提取：兼容 Go 网关 {error, code} 和 RAG 服务 {detail} 两种响应格式 */
+function extractErrorMessage(body: any, fallback: string): string {
+  return body?.error || body?.detail || fallback
+}
+
 // ==================== 认证 ====================
 
 /** 用户登录 — 返回 JWT Token */
@@ -133,7 +159,7 @@ export async function login(username: string, password: string): Promise<LoginRe
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.error || body.detail || `登录失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `登录失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -159,7 +185,7 @@ export async function register(
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.error || `注册失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `注册失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -192,7 +218,7 @@ export async function getProfile(): Promise<UserProfile> {
 }
 
 /** 导出个人数据 (PIPL §45) */
-export async function exportUserData(): Promise<any> {
+export async function exportUserData(): Promise<UserExportData> {
   const resp = await authFetch(`${API_BASE}/user/export`)
   if (!resp.ok) throw new Error("导出失败")
   return resp.json()
@@ -225,14 +251,14 @@ export async function cancelAccountDeletion(requestId: string): Promise<void> {
 // ==================== 知识库 ====================
 
 /** 获取知识库列表 */
-export async function getKnowledgeBases(): Promise<any> {
+export async function getKnowledgeBases(): Promise<KnowledgeBase[]> {
   const resp = await authFetch(`${API_BASE}/knowledge-bases`)
   if (!resp.ok) throw new Error("获取知识库列表失败")
   return resp.json()
 }
 
 /** 创建知识库 */
-export async function createKnowledgeBase(name: string, description?: string): Promise<any> {
+export async function createKnowledgeBase(name: string, description?: string): Promise<KnowledgeBase> {
   const resp = await authFetch(`${API_BASE}/knowledge-bases`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -255,7 +281,7 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}))
-    throw new Error(body.detail || body.error || `上传失败 (${resp.status})`)
+    throw new Error(extractErrorMessage(body, `上传失败 (${resp.status})`))
   }
 
   return resp.json()
@@ -305,7 +331,7 @@ export async function chatStream(options: ChatOptions) {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
-      onError(body.error || body.detail || `请求失败 (${response.status})`)
+      onError(extractErrorMessage(body, `请求失败 (${response.status})`))
       return
     }
 
@@ -342,6 +368,7 @@ export async function chatStream(options: ChatOptions) {
                 onDone()
                 return
               case "error":
+              case "llm.error":
                 onError(data.content)
                 break
             }
@@ -371,7 +398,7 @@ export async function getSystemStats(): Promise<SystemStats> {
 }
 
 /** 管理员触发数据清理 */
-export async function adminCleanup(): Promise<any> {
+export async function adminCleanup(): Promise<CleanupResult> {
   const resp = await authFetch(`${API_BASE}/admin/cleanup`, { method: "POST" })
   if (!resp.ok) throw new Error("数据清理失败")
   return resp.json()
