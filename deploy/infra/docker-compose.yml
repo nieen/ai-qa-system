@@ -258,6 +258,14 @@ services:
         condition: service_healthy
     networks:
       - ai-qa-net
+    healthcheck:
+      test: ["CMD", "python", "-m", "workers.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "9101"  # Prometheus 指标 (注意 swarm 模式下随机映射，需配合标签抓取)
     deploy:
       replicas: 2  # 默认 2 个 Worker 副本
 
@@ -325,29 +333,3 @@ services:
   #             capabilities: [gpu]
   # 实际部署时取消注释并配置路径
   # ============================================================
-  # vllm:
-  #   image: vllm/vllm-openai:latest
-  #   container_name: aiqa-vllm
-  #   restart: always
-  #   ports:
-  #     - "8000:8000"
-  #   volumes:
-  #     - /path/to/models:/models
-  #   networks:
-  #     - ai-qa-net
-  #   command: >
-  #     --model /models/DeepSeek-R1-Distill-Qwen-32B
-  #     --port 8000
-  #     --max-model-len 32768
-  #     --gpu-memory-utilization 0.9
-  #     --tensor-parallel-size 2
-  #     --dtype bfloat16
-  #     --served-model-name deepseek-r1
-  #     --enable-auto-tool-choice
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
