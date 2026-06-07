@@ -94,6 +94,7 @@ cd ../../frontend/ai-qa-app && npm install && npm run dev
 | 文档 | 说明 |
 |------|------|
 | [AGENTS.md](AGENTS.md) | AI Agent 工作标准（项目约束、代码约定） |
+| [ROADMAP.md](ROADMAP.md) | 项目发展规划（Phase 2/3/4 路线图） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 系统架构与设计详解 |
 | [部署手册](docs/deployment-manual.md) | 环境要求、部署步骤、运维指南 |
 | [用户手册](docs/user-manual.md) | 功能操作、界面说明、常见问题 |

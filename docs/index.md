@@ -14,6 +14,7 @@
 |------|------|---------|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | 系统架构、RAG 核心流程、技术选型详解 | 架构师、开发者 |
 | [AGENTS.md](../AGENTS.md) | AI Agent 工作标准——项目约束、代码约定 | 开发者、AI Agent |
+| [ROADMAP.md](../ROADMAP.md) | 项目发展规划——Phase 2/3/4 路线图 | 开发者、项目管理者 |
 
 ## 🚀 部署与运维
 

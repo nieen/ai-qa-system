@@ -46,9 +46,13 @@ app/core/tracing.py       — OpenTelemetry 链路追踪
 
 文档索引从 `BackgroundTasks` 迁移到 **Redis Streams**：
 
+```
+上传 API → Redis Stream → (独立 Worker 进程) → 解析 → 向量化 → 写入 Milvus
+```
+
+- **Worker 是独立进程**: `workers/document_worker.py` 有自己的 `if __name__ == "__main__": main()` 入口，通过 `python -m workers.document_worker` 启动，与 RAG API 服务 (`python -m app.main`) 是两个独立的进程
 - 上传文档 → 写入 Redis Stream `doc:index`
-- Worker (`workers/document_worker.py`) 通过消费者组消费
-- 支持多副本负载均衡（同 group name 自动分配）
+- Worker 通过消费者组消费，支持多副本负载均衡（同 group name 自动分配）
 - 死信重试: Pending Entries + XCLAIM，最多重试 3 次
 - 零新增基础设施: Redis 已在运行，直接复用
 
