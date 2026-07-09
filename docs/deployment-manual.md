@@ -103,31 +103,29 @@
 ### 3.1 部署步骤
 
 ```bash
-# 1. 进入部署目录
-cd deploy/infra
+# 方式一：使用统一命令入口（推荐）
+cd /path/to/ai-qa-system
+bash make.sh infra
 
-# 2. 启动基础服务 (Milvus + PostgreSQL + Redis + MinIO)
+# 方式二：手动进入目录
+cd deploy/infra
 docker compose up -d
 
-# 3. 查看启动状态
-docker compose ps
-
-# 4. 查看实时日志
-docker compose logs -f
+# 两种方式效果相同，方式一更简便
 ```
 
-### 3.2 启动的服务
+> 基础设施包含以下容器：
 
-| 服务名 | 容器名 | 说明 |
-|--------|--------|------|
-| `milvus-etcd` | `aiqa-etcd` | Milvus 元数据存储（分布式协调） |
-| `milvus-minio` | `aiqa-milvus-minio` | Milvus 内置对象存储 |
-| `milvus` | `aiqa-milvus` | 向量数据库主服务 |
-| `postgres` | `aiqa-postgres` | 业务元数据、用户、对话 |
-| `redis` | `aiqa-redis` | 会话缓存、限流、任务队列 |
-| `minio` | `aiqa-minio` | 原始文档存储（非 Milvus 内置） |
+> | 服务名 | 容器名 | 说明 |
+> |--------|--------|------|
+> | `milvus-etcd` | `aiqa-etcd` | Milvus 元数据存储（分布式协调） |
+> | `milvus-minio` | `aiqa-milvus-minio` | Milvus 内置对象存储 |
+> | `milvus` | `aiqa-milvus` | 向量数据库主服务 |
+> | `postgres` | `aiqa-postgres` | 业务元数据、用户、对话 |
+> | `redis` | `aiqa-redis` | 会话缓存、限流、任务队列 |
+> | `minio` | `aiqa-minio` | 原始文档存储（非 Milvus 内置） |
 
-### 3.3 验证基础设施就绪
+### 3.2 验证基础设施就绪
 
 ```bash
 # 健康检查端点
@@ -143,15 +141,26 @@ redis-cli -a aiqa_redis_pass_2026 ping     # Redis
 
 ### 4.1 一键启动（开发环境）
 
-```powershell
-# Windows (PowerShell)
-.\deploy\startup.ps1
+```bash
+# 推荐：使用统一命令入口
+# 1. 启动基础设施
+bash make.sh infra
+
+# 2. 执行数据库迁移（统一处理网关 + RAG 两个数据库）
+bash make.sh db-migrate
+
+# 3. 开三个终端分别运行：
+#    终端1: Go 网关（air 热重载）
+bash make.sh dev-gateway
+
+#    终端2: RAG 服务（uvicorn --reload）
+bash make.sh dev-rag
+
+#    终端3: 前端（npm run dev）
+bash make.sh dev-frontend
 ```
 
-```bash
-# Linux/Mac
-chmod +x deploy/startup.sh && ./deploy/startup.sh
-```
+> 首次部署可使用一键部署: `bash make.sh deploy`（自动执行 git pull → infra → migrate → build → up）
 
 ### 4.2 手动分步启动
 
@@ -163,7 +172,15 @@ cp .env.example .env
 # 编辑 .env，修改必要配置（API Key 等）
 ```
 
-#### 步骤 2: 启动 RAG 服务
+#### 步骤 2: 执行数据库迁移
+
+```bash
+# 统一入口，自动处理网关 (golang-migrate) 和 RAG (Alembic) 两个数据库
+cd backend/gateway
+go run ./cmd/migrate/ up
+```
+
+#### 步骤 3: 启动 RAG 服务
 
 ```bash
 cd backend/rag-service
@@ -184,12 +201,12 @@ python -m app.main
 # → 监听 http://localhost:8001
 ```
 
-#### 步骤 3: 启动文档索引 Worker
+#### 步骤 4: 启动文档索引 Worker
 
 ```bash
 # 新终端窗口
 cd backend/rag-service
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\\Scripts\\activate
 
 # 启动 Worker（可同时启动多个实现负载均衡）
 python -m workers.document_worker worker-1
@@ -199,17 +216,20 @@ python -m workers.document_worker worker-2
 # → 通过 Redis Streams 消费者组消费文档索引任务
 ```
 
-#### 步骤 4: 启动 API 网关
+#### 步骤 5: 启动 API 网关
 
 ```bash
+# 开发模式（热重载）
 cd backend/gateway
-go mod tidy
-go run cmd/main.go
+air -c .air.toml
+
+# 或生产模式
+# go run cmd/main.go
 
 # → 监听 http://localhost:8080
 ```
 
-#### 步骤 5: 启动前端
+#### 步骤 6: 启动前端
 
 ```bash
 cd frontend/ai-qa-app
@@ -482,6 +502,7 @@ OTEL_SERVICE_NAME=rag-service
 - [ ] CORS 已配置为实际域名
 - [ ] GPU 驱动已安装且 `nvidia-smi` 正常（如需加速嵌入/重排）
 - [ ] Docker Compose 基础设施已启动并健康
+- [ ] 数据库迁移已执行 (`go run ./cmd/migrate/ up`)
 - [ ] LLM API Key 已配置且网络可达
 - [ ] 防火墙已开放必要端口
 

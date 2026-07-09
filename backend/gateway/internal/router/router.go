@@ -66,27 +66,27 @@ func RegisterRoutes(r *gin.Engine, cfg *config.Config, logger *zap.SugaredLogger
 		protected.POST("/user/delete-request/:requestId/confirm", h.ConfirmDeletion)
 		protected.POST("/user/delete-request/:requestId/cancel", h.CancelDeletion)
 
-		// 知识库
-		protected.GET("/knowledge-bases", h.ListKnowledgeBases)
-		protected.POST("/knowledge-bases", h.CreateKnowledgeBase)
-		protected.GET("/knowledge-bases/:id", h.GetKnowledgeBase)
-		protected.PUT("/knowledge-bases/:id", h.UpdateKnowledgeBase)
-		protected.DELETE("/knowledge-bases/:id", h.DeleteKnowledgeBase)
+		// 知识库 (使用通用 Forward，无需单独 handler)
+		protected.GET("/knowledge-bases", h.Forward("GET", "/knowledge-bases"))
+		protected.POST("/knowledge-bases", h.Forward("POST", "/knowledge-bases"))
+		protected.GET("/knowledge-bases/:id", h.Forward("GET", "/knowledge-bases/:id"))
+		protected.PUT("/knowledge-bases/:id", h.Forward("PUT", "/knowledge-bases/:id"))
+		protected.DELETE("/knowledge-bases/:id", h.Forward("DELETE", "/knowledge-bases/:id"))
 
 		// 文档管理
-		protected.GET("/knowledge-bases/:kbId/documents", h.ListDocuments)
+		protected.GET("/knowledge-bases/:kbId/documents", h.Forward("GET", "/knowledge-bases/:kbId/documents"))
 		protected.POST("/knowledge-bases/:kbId/documents/upload", h.UploadDocument)
-		protected.POST("/knowledge-bases/:kbId/documents/webpage", h.AddWebPage)
-		protected.DELETE("/knowledge-bases/:kbId/documents/:docId", h.DeleteDocument)
-		protected.GET("/knowledge-bases/:kbId/documents/:docId/status", h.GetDocumentStatus)
+		protected.POST("/knowledge-bases/:kbId/documents/webpage", h.Forward("POST", "/knowledge-bases/:kbId/documents/webpage"))
+		protected.DELETE("/knowledge-bases/:kbId/documents/:docId", h.Forward("DELETE", "/knowledge-bases/:kbId/documents/:docId"))
+		protected.GET("/knowledge-bases/:kbId/documents/:docId/status", h.Forward("GET", "/knowledge-bases/:kbId/documents/:docId/status"))
 
 		// 问答 & 消息
 		protected.POST("/knowledge-bases/:kbId/chat", h.Chat)
-		protected.GET("/conversations/:convId/messages", h.GetMessages)
+		protected.GET("/conversations/:convId/messages", h.Forward("GET", "/conversations/:convId/messages"))
 
 		// 对话管理
-		protected.GET("/conversations", h.ListConversations)
-		protected.DELETE("/conversations/:convId", h.DeleteConversation)
+		protected.GET("/conversations", h.ForwardWithUserID("GET", "/users/{userID}/conversations"))
+		protected.DELETE("/conversations/:convId", h.Forward("DELETE", "/conversations/:convId"))
 
 		// 管理员端点
 		protected.GET("/admin/stats", admin, h.GetSystemStats)

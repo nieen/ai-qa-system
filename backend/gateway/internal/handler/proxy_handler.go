@@ -9,113 +9,20 @@ import (
 
 // ==================== 知识库 ====================
 
-// ListKnowledgeBases 获取知识库列表
-// @Summary     获取知识库列表
-// @Tags        知识库
-// @Produce     json
-// @Security    BearerAuth
-// @Success     200 {object} map[string]interface{} "知识库列表"
-// @Router      /knowledge-bases [get]
-func (h *Handler) ListKnowledgeBases(c *gin.Context) {
-	h.ragProxy.Request(c, "GET", "/knowledge-bases", nil)
-}
+// 知识库 CRUD 通过 h.Forward() 在 router.go 中注册，无需单独 handler。
 
-// CreateKnowledgeBase 创建知识库
-// @Summary     创建知识库
-// @Tags        知识库
-// @Security    BearerAuth
-// @Router      /knowledge-bases [post]
-func (h *Handler) CreateKnowledgeBase(c *gin.Context) {
-	h.ragProxy.Request(c, "POST", "/knowledge-bases", nil)
-}
+// ==================== 文档管理 ====================
 
-// GetKnowledgeBase 获取知识库详情
-// @Summary     获取知识库详情
-// @Tags        知识库
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{id} [get]
-func (h *Handler) GetKnowledgeBase(c *gin.Context) {
-	id := c.Param("id")
-	h.ragProxy.Request(c, "GET", fmt.Sprintf("/knowledge-bases/%s", id), nil)
-}
-
-// UpdateKnowledgeBase 更新知识库
-// @Summary     更新知识库
-// @Tags        知识库
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{id} [put]
-func (h *Handler) UpdateKnowledgeBase(c *gin.Context) {
-	id := c.Param("id")
-	h.ragProxy.Request(c, "PUT", fmt.Sprintf("/knowledge-bases/%s", id), nil)
-}
-
-// DeleteKnowledgeBase 删除知识库
-// @Summary     删除知识库
-// @Tags        知识库
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{id} [delete]
-func (h *Handler) DeleteKnowledgeBase(c *gin.Context) {
-	id := c.Param("id")
-	h.ragProxy.Request(c, "DELETE", fmt.Sprintf("/knowledge-bases/%s", id), nil)
-}
-
-// ==================== 文档 ====================
-
-// ListDocuments 获取文档列表
-// @Summary     获取文档列表
-// @Tags        文档管理
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{kbId}/documents [get]
-func (h *Handler) ListDocuments(c *gin.Context) {
-	kbID := c.Param("kbId")
-	h.ragProxy.Request(c, "GET", fmt.Sprintf("/knowledge-bases/%s/documents", kbID), nil)
-}
-
-// UploadDocument 上传文档
+// UploadDocument 上传文档（特殊 handler：需要处理文件上传 + 大小限制）
 // @Summary     上传文档
-// @Description 上传文档到知识库（代理到 RAG 服务）
 // @Tags        文档管理
 // @Security    BearerAuth
 // @Router      /knowledge-bases/{kbId}/documents/upload [post]
 func (h *Handler) UploadDocument(c *gin.Context) {
 	kbID := c.Param("kbId")
-
-	maxSize := int64(50 << 20) // 默认 50MB
+	maxSize := int64(50 << 20)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSize)
-
 	h.ragProxy.UploadFile(c, kbID)
-}
-
-// AddWebPage 添加网页
-// @Summary     添加网页
-// @Tags        文档管理
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{kbId}/documents/webpage [post]
-func (h *Handler) AddWebPage(c *gin.Context) {
-	kbID := c.Param("kbId")
-	h.ragProxy.Request(c, "POST", fmt.Sprintf("/knowledge-bases/%s/documents/webpage", kbID), nil)
-}
-
-// DeleteDocument 删除文档
-// @Summary     删除文档
-// @Tags        文档管理
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{kbId}/documents/{docId} [delete]
-func (h *Handler) DeleteDocument(c *gin.Context) {
-	kbID := c.Param("kbId")
-	docID := c.Param("docId")
-	h.ragProxy.Request(c, "DELETE", fmt.Sprintf("/knowledge-bases/%s/documents/%s", kbID, docID), nil)
-}
-
-// GetDocumentStatus 获取文档索引状态
-// @Summary     获取文档索引状态
-// @Tags        文档管理
-// @Security    BearerAuth
-// @Router      /knowledge-bases/{kbId}/documents/{docId}/status [get]
-func (h *Handler) GetDocumentStatus(c *gin.Context) {
-	kbID := c.Param("kbId")
-	docID := c.Param("docId")
-	h.ragProxy.Request(c, "GET", fmt.Sprintf("/knowledge-bases/%s/documents/%s/status", kbID, docID), nil)
 }
 
 // ==================== 问答 ====================
@@ -144,38 +51,6 @@ func (h *Handler) Chat(c *gin.Context) {
 	h.ragProxy.RequestStream(c, "POST", fmt.Sprintf("/knowledge-bases/%s/chat", kbID), req)
 }
 
-// GetMessages 获取对话消息
-// @Summary     获取对话消息
-// @Tags        问答
-// @Security    BearerAuth
-// @Router      /conversations/{convId}/messages [get]
-func (h *Handler) GetMessages(c *gin.Context) {
-	convID := c.Param("convId")
-	h.ragProxy.Request(c, "GET", fmt.Sprintf("/conversations/%s/messages", convID), nil)
-}
-
-// ==================== 对话 ====================
-
-// ListConversations 获取对话列表
-// @Summary     获取对话列表
-// @Tags        对话管理
-// @Security    BearerAuth
-// @Router      /conversations [get]
-func (h *Handler) ListConversations(c *gin.Context) {
-	userID := c.GetString(ctxKeyUserID)
-	h.ragProxy.Request(c, "GET", fmt.Sprintf("/users/%s/conversations", userID), nil)
-}
-
-// DeleteConversation 删除对话
-// @Summary     删除对话
-// @Tags        对话管理
-// @Security    BearerAuth
-// @Router      /conversations/{convId} [delete]
-func (h *Handler) DeleteConversation(c *gin.Context) {
-	convID := c.Param("convId")
-	h.ragProxy.Request(c, "DELETE", fmt.Sprintf("/conversations/%s", convID), nil)
-}
-
 // ==================== 健康检查 ====================
 
 // InternalHealth 内部健康检查
@@ -197,3 +72,16 @@ func (h *Handler) InternalHealth(c *gin.Context) {
 func (h *Handler) CheckDownstreamHealth(c *gin.Context) {
 	h.ragProxy.CheckHealth(c)
 }
+
+// 以下知识库/文档路由通过 h.Forward() 在 router.go 中统一注册:
+//   GET    /knowledge-bases                        → Forward("GET", "/knowledge-bases")
+//   POST   /knowledge-bases                        → Forward("POST", "/knowledge-bases")
+//   GET    /knowledge-bases/:id                     → Forward("GET", "/knowledge-bases/:id")
+//   PUT    /knowledge-bases/:id                     → Forward("PUT", "/knowledge-bases/:id")
+//   DELETE /knowledge-bases/:id                     → Forward("DELETE", "/knowledge-bases/:id")
+//   GET    /knowledge-bases/:kbId/documents          → Forward("GET", "/knowledge-bases/:kbId/documents")
+//   POST   /knowledge-bases/:kbId/documents/webpage  → Forward("POST", "/knowledge-bases/:kbId/documents/webpage")
+//   DELETE /knowledge-bases/:kbId/documents/:docId   → Forward("DELETE", "/knowledge-bases/:kbId/documents/:docId")
+//   GET    /knowledge-bases/:kbId/documents/:docId/status → Forward("GET", "/knowledge-bases/:kbId/documents/:docId/status")
+//   GET    /conversations/:convId/messages            → Forward("GET", "/conversations/:convId/messages")
+//   DELETE /conversations/:convId                     → Forward("DELETE", "/conversations/:convId")

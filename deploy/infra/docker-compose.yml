@@ -77,6 +77,12 @@ services:
       - milvus-data:/var/lib/milvus
     networks:
       - ai-qa-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       milvus-etcd:
         condition: service_healthy
@@ -113,7 +119,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U aiqa"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
   # ============================================================
   # 3. 缓存 - Redis
@@ -223,7 +230,7 @@ services:
       redis:
         condition: service_healthy
       milvus:
-        condition: service_started
+        condition: service_healthy
       rag-migration:
         condition: service_completed_successfully
     networks:
@@ -287,6 +294,10 @@ services:
     volumes:
       - ./gateway-config.yaml:/app/config.yaml:ro
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       rag-service:
         condition: service_started
       gateway-migration:
