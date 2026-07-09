@@ -1,19 +1,9 @@
 # deploy/infra/migrations/rag/versions/
 
-<!-- Fixer: Fill in this section with architectural understanding -->
+## 职责
 
-## Responsibility
+Alembic 迁移版本文件。每个文件代表一次 schema 变更。
 
-<!-- What is this folder's job in the system? -->
+## 当前版本
 
-## Design
-
-<!-- Key patterns, abstractions, architectural decisions -->
-
-## Flow
-
-<!-- How does data/control flow through this module? -->
-
-## Integration
-
-<!-- How does it connect to other parts of the system? -->
+- `2026_01_01_baseline.py`: 初始 baseline — chat_sessions / chat_messages / documents / document_chunks / knowledge_bases 表

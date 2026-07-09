@@ -1,19 +1,5 @@
 # deploy/infra/migrations/
 
-<!-- Fixer: Fill in this section with architectural understanding -->
+## 职责
 
-## Responsibility
-
-<!-- What is this folder's job in the system? -->
-
-## Design
-
-<!-- Key patterns, abstractions, architectural decisions -->
-
-## Flow
-
-<!-- How does data/control flow through this module? -->
-
-## Integration
-
-<!-- How does it connect to other parts of the system? -->
+数据库迁移根目录。管理两个独立数据库的 schema 迁移：网关（golang-migrate）和 RAG（Alembic）。

@@ -1,19 +1,11 @@
 # deploy/infra/migrations/rag/
 
-<!-- Fixer: Fill in this section with architectural understanding -->
+## 职责
 
-## Responsibility
+RAG 服务数据库迁移（`aiqa_rag`）。使用 Alembic 管理的异步迁移。
 
-<!-- What is this folder's job in the system? -->
+## 迁移方式
 
-## Design
-
-<!-- Key patterns, abstractions, architectural decisions -->
-
-## Flow
-
-<!-- How does data/control flow through this module? -->
-
-## Integration
-
-<!-- How does it connect to other parts of the system? -->
+- `alembic.ini`: Alembic 配置（连接到 `aiqa_rag` 数据库）
+- `env.py`: Alembic 环境配置（异步引擎 + async session）
+- `versions/`: 迁移版本文件（Python 脚本）

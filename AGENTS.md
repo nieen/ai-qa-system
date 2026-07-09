@@ -22,3 +22,14 @@
 | API 网关 | `backend/gateway/AGENTS.md` | Go 1.26.3 + Gin | `cmd/main.go` |
 | RAG 服务 | `backend/rag-service/AGENTS.md` | Python 3.13+ + FastAPI | `app/main.py` |
 | 前端 | `frontend/ai-qa-app/AGENTS.md` | Next.js 16.2 + React 19 | `src/app/page.tsx` |
+
+## Repository Map
+
+完整代码图谱在 `codemap.md`（项目根目录）。
+
+开始任务前请先阅读 `codemap.md`，了解：
+- 项目架构和入口点
+- 目录职责和设计模式
+- 数据流和模块间集成点
+
+如需深入某文件夹，也请阅读对应子目录的 `codemap.md`。
