@@ -25,6 +25,7 @@ build/
 
 # IDE
 .vscode/
+.zed
 .idea/
 *.swp
 *.swo
@@ -47,3 +48,4 @@ frontend/ai-qa-app/out/
 # Agent
 .atomcode
 .workbuddy
+.slim/
