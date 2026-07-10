@@ -25,20 +25,23 @@
 cp .env.example .env       # 编辑 .env 填入 LLM API Key
 
 # 2. 启动基础设施（PostgreSQL / Redis / Milvus / MinIO）
-cd deploy/infra && docker compose up -d
+bash make.sh infra
 
-# 3. 启动 RAG 服务
-cd ../../backend/rag-service && pip install -r requirements.txt
-python -m app.main &
+# 3. 执行数据库迁移（统一入口，自动处理网关 + RAG 两个库）
+bash make.sh db-migrate
 
-# 4. 启动 API 网关
-cd ../../backend/gateway && go mod tidy && go run cmd/main.go &
+# 4. 启动 RAG 服务（uvicorn 热重载）
+bash make.sh dev-rag &
 
-# 5. 启动前端
-cd ../../frontend/ai-qa-app && npm install && npm run dev
+# 5. 启动 API 网关（air 热重载）
+bash make.sh dev-gateway &
+
+# 6. 启动前端
+cd frontend/ai-qa-app && npm install && npm run dev
 ```
 
-> Windows 一键启动: `.\deploy\startup.ps1`
+> 一键启动: `bash make.sh dev` (启动基础设施后提示手动开三个终端)<br>
+> 一键部署: `bash make.sh deploy` (git pull → infra → migrate → build → up)
 
 ## 架构一览
 

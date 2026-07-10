@@ -604,6 +604,22 @@ LLM 全部通过 API 接入，**不消耗本地 GPU 资源**。GPU 仅用于嵌�
 
 ### 数据库版本管理
 
+两个数据库独立管理迁移，但通过 **统一迁移 CLI** 一个命令执行全部：
+
+```bash
+cd backend/gateway
+go run ./cmd/migrate/ up      # 执行全部待处理迁移
+go run ./cmd/migrate/ down    # 回滚最近一次迁移
+go run ./cmd/migrate/ status  # 查看迁移状态
+```
+
+该 CLI 内部自动调度两个迁移工具：
+
+| 数据库 | 工具 | 调度方式 |
+|--------|------|---------|
+| `aiqa_gateway` (网关) | **golang-migrate** | 通过 `migrate/migrate:v4.18.1` Docker 镜像运行 |
+| `aiqa_rag` (RAG) | **Alembic** | 通过 Python 子进程直接调用 |
+
 **RAG 服务 (`aiqa_rag`)** 使用 **Alembic** (Python) 管理：
 
 ```

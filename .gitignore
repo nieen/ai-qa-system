@@ -9,14 +9,23 @@ tmp/
 
 # Go
 vendor/
+*.exe
+*.test
+coverage.out
+backend/gateway/bin/
 
 # Node
 node_modules/
 .next/
 npm-debug.log*
 
+# Build artifacts
+dist/
+build/
+
 # IDE
 .vscode/
+.zed
 .idea/
 *.swp
 *.swo
@@ -29,11 +38,8 @@ Thumbs.db
 .env
 .env.local
 
-# Logs
+# Logs（运行时日志；如需提交特定日志请用 ! 显式放开）
 *.log
-
-# Git
-.git/
 
 # Frontend specific
 frontend/ai-qa-app/.next/
