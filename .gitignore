@@ -48,3 +48,6 @@ frontend/ai-qa-app/out/
 # Agent
 .atomcode
 .workbuddy
+.codebuddy
+.opencode
+.zcode

@@ -1,0 +1,45 @@
+schema: spec-driven
+
+context: |
+  # 企业 AI 智能问答系统 (ai-qa-system)
+  #
+  # 技术栈
+  # - API 网关: Go 1.26 + Gin (backend/gateway/)
+  # - RAG 服务: Python 3.13+ + FastAPI (backend/rag-service/)
+  # - 前端: Next.js 16 + React 19 + Tailwind CSS 3 (frontend/ai-qa-app/)
+  # - 存储: PostgreSQL 16 + Redis 7 + MinIO
+  # - 向量库: Milvus 2.5
+  # - AI 嵌入/重排: BGE-M3 + BGE-Reranker
+  # - LLM 供应: DeepSeek / Claude / OpenAI (全部 API 接入)
+  # - Agent CLIs: OpenCode, CodeBuddy, AtomCode
+  # - Spec-driven: OpenSpec
+  #
+  # 项目结构
+  # - backend/gateway/     — Go API 网关（认证/限流/熔断/代理）
+  # - backend/rag-service/ — Python RAG 服务（文档索引/检索/LLM 问答）
+  # - frontend/ai-qa-app/  — Next.js 前端
+  # - deploy/              — Docker Compose / 迁移 / 部署脚本
+  # - docs/                — 文档
+  #
+  # 代码约定
+  # - 提交信息使用 conventional commits (feat/fix/chore/refactor/docs)
+  # - Go: 标准项目布局 (cmd/internal/pkg)
+  # - Python: 使用 async/await, FastAPI 风格
+  # - 前端: shadcn/ui 组件库, Tailwind CSS
+  # - 两个后端使用同一 PostgreSQL 实例的不同数据库 (aiqa_gateway / aiqa_rag)
+  # - 数据库迁移: 统一 CLI (go run ./cmd/migrate/ up)
+  #
+  # 构建与部署
+  # - 统一入口: bash make.sh <command> 或 Makefile
+  # - 基础设施: Docker Compose (deploy/infra/docker-compose.yml)
+  # - Go 热重载: air (backend/gateway/.air.toml)
+
+rules:
+  proposal:
+    - 每个变更必须说明影响范围（网关/RAG/前端/部署/文档）
+    - API 变更必须说明前后端兼容性
+    - 数据库变更必须附迁移脚本
+  tasks:
+    - 按"分析→实现→验证"三步拆分
+    - 每个任务可独立提交
+    - 涉及两个后端时说明跨服务影响
